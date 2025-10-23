@@ -24,6 +24,7 @@
       <div style="margin-top:1rem">
         <label for="volume">Volume</label>
         <input id="volume" type="range" min="0" max="100" value="50" style="width:100%">
+        <span id="volume-indicator" style="display:none;margin-left:.6rem;font-size:0.9rem;color:#1f8ceb;background:#e6f2ff;padding:2px 6px;border-radius:6px;vertical-align:middle">Overridden</span>
       </div>
       <div style="margin-top:1rem;display:flex;gap:.5rem;align-items:center">
         <button id="shuffle-btn" title="Toggle shuffle" class="icon-btn"><svg><use xlink:href="#icon-shuffle"></use></svg></button>
@@ -132,10 +133,18 @@
           showToast(`Applied mapping options — shuffle: ${mapping.shuffle? 'on':'off'}, repeat: ${mapping.repeat||'off'}`);
           // If mapping provides a volume override, update the volume slider to reflect it without re-sending
           if(typeof mapping.volume === 'number'){
-            // Temporarily disable input handler to avoid sending another control request
-            const prevHandler = volEl.oninput;
+            // Update slider to show mapping-applied volume (programmatic change doesn't fire input)
             volEl.value = mapping.volume;
-            // restore handler (debounced listener below listens to 'input' via addEventListener, so programmatic change shouldn't trigger it)
+            // show small indicator next to slider
+            try{
+              const ind = document.getElementById('volume-indicator');
+              if(ind){
+                ind.style.display = 'inline-block';
+                // clear previous timeout if any
+                if(window._jj_vol_ind_to) clearTimeout(window._jj_vol_ind_to);
+                window._jj_vol_ind_to = setTimeout(()=>{ try{ ind.style.display='none' }catch(e){} }, 3000);
+              }
+            }catch(e){}
             showToast(`Volume set to ${mapping.volume} by mapping`);
           }
         }
@@ -154,6 +163,12 @@
     }catch(e){ /* ignore */ }
   }
   volEl.addEventListener('input', ()=>{
+    // hide the 'Overridden' indicator when the user interacts
+    try{
+      const ind = document.getElementById('volume-indicator');
+      if(ind){ ind.style.display = 'none'; }
+      if(window._jj_vol_ind_to) { clearTimeout(window._jj_vol_ind_to); window._jj_vol_ind_to = null; }
+    }catch(e){}
     // debounce rapid changes
     if(volTimeout) clearTimeout(volTimeout);
     volTimeout = setTimeout(async ()=>{
