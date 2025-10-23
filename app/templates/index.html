@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>JellyJam NFC Player</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <h1>JellyJam NFC Player</h1>
+    <section>
+      <h2>Spotify Configuration</h2>
+      <form method="post" action="/spotify">
+        <label>Client ID <input name="client_id" value="{{ config.get('spotify', {}).get('client_id','') }}"></label><br>
+        <label>Client Secret <input name="client_secret" value="{{ config.get('spotify', {}).get('client_secret','') }}"></label><br>
+  <label>Redirect URI <input name="redirect_uri" value="{{ config.get('spotify', {}).get('redirect_uri','http://127.0.0.1:5000/callback') }}"></label><br>
+        <button type="submit">Save Spotify Config</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Mappings</h2>
+      <form method="post" action="/mappings">
+        <label>Card ID <input name="card_id"></label><br>
+        <label>Type <select name="type"><option value="local">Local</option><option value="spotify">Spotify</option></select></label><br>
+        <label>Playlist ID / Path <input name="playlist_id"></label><br>
+        <button type="submit">Add Mapping</button>
+      </form>
+
+      <h3>Existing mappings</h3>
+      <ul>
+        {% for cid, m in config.get('mappings', {}).items() %}
+          <li>{{ cid }} → {{ m.type }} : {{ m.id }}</li>
+        {% else %}
+          <li>No mappings yet</li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <section>
+      <h2>Simulate NFC</h2>
+      <input id="card" placeholder="card id"><button id="sim">Simulate</button>
+    </section>
+
+    <script>
+    document.getElementById('sim').addEventListener('click', async () => {
+      const card = document.getElementById('card').value;
+      const res = await fetch('/simulate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({card_id: card})});
+      alert((await res.json()).ok ? 'Simulated' : 'Error');
+    });
+    </script>
+  </body>
+</html>

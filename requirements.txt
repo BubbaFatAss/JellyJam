@@ -1,0 +1,7 @@
+Flask>=2.0
+requests>=2.28
+python-vlc>=3.0
+spotipy>=2.22.0
+# For real NFC hardware, the user can install nfcpy or other drivers (optional)
+# nfcpy>=1.0
+mutagen>=1.45

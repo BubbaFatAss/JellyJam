@@ -1,0 +1,55 @@
+{% extends 'base.html' %}
+{% block content %}
+  <section class="panel">
+    <h2>Spotify Settings</h2>
+    <form method="post" action="{{ url_for('spotify_config') }}">
+      <label>Client ID <input name="client_id" value="{{ config.get('spotify', {}).get('client_id','') }}"></label>
+      <label>Client Secret <input name="client_secret" value="{{ config.get('spotify', {}).get('client_secret','') }}"></label>
+  <label>Redirect URI <input name="redirect_uri" value="{{ config.get('spotify', {}).get('redirect_uri','http://127.0.0.1:5000/spotify/callback') }}"></label>
+      <div class="form-actions">
+        <button type="submit">Save</button>
+      </div>
+    </form>
+    <div style="margin-top:1rem">
+      <h3>OAuth</h3>
+  <p class="muted">Register the redirect URI in your Spotify app settings (Developer Dashboard) exactly as shown here. For local testing use <code>http://127.0.0.1:5000/spotify/callback</code>. Spotify blocks non-127.0.0.1 HTTP redirect URIs. For remote Pi use your Pi's LAN address or an HTTPS tunnel (ngrok).</p>
+      <div id="token-status">
+        {% if config.get('spotify_token') %}
+          <p>Connected (token stored)</p>
+          <form method="post" action="{{ url_for('spotify_disconnect') }}">
+            <button type="submit">Disconnect</button>
+          </form>
+        {% else %}
+          <p>Not connected</p>
+          <a href="{{ url_for('spotify_connect') }}"><button>Connect to Spotify</button></a>
+        {% endif %}
+      </div>
+    </div>
+    <div style="margin-top:1rem">
+      <h3>Device</h3>
+      <p class="muted">Select the Spotify Connect device that the Pi should control.</p>
+      <select id="device-select-settings"></select>
+      <div style="margin-top:.5rem"><button id="refresh-devices">Refresh devices</button></div>
+    </div>
+  </section>
+  <script>
+  async function loadDevicesSettings(){
+    const r = await fetch('/api/spotify/devices');
+    const j = await r.json();
+    const sel = document.getElementById('device-select-settings');
+    sel.innerHTML = '';
+    const devs = j.devices || [];
+    if(devs.length===0){ sel.add(new Option('(no devices)', '')); sel.disabled = true; return; }
+    sel.disabled = false;
+    for(const d of devs){ sel.add(new Option(`${d.name} (${d.type})`, d.id)); }
+    if(j.selected) sel.value = j.selected;
+    sel.addEventListener('change', async ()=>{
+      await fetch('/api/spotify/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id: sel.value})});
+    });
+  }
+  document.getElementById('refresh-devices').addEventListener('click', async ()=>{ await loadDevicesSettings(); });
+  // load devices on page load
+  loadDevicesSettings();
+  </script>
+  </section>
+{% endblock %}

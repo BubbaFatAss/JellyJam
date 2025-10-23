@@ -1,0 +1,125 @@
+{% extends 'base.html' %}
+{% block content %}
+  <section class="panel">
+    <h2>Mappings</h2>
+    <form id="add-mapping" method="post" action="{{ url_for('mappings') }}">
+      <label>Card ID <input id="card-input" name="card_id"></label>
+      <label>Type <select id="type" name="type"><option value="local">Local</option><option value="spotify">Spotify</option></select></label>
+      <label id="playlist-label"><span id="playlist-label-text">Playlist</span>
+        <select id="playlist-select" name="playlist_select"><option>Loading...</option></select>
+      </label>
+  <label id="playlist-manual" style="display:none"><input id="manual-path" name="manual_path" placeholder="Playlist URI or ID"></label>
+      <div class="form-actions">
+          <button type="submit" id="add-btn">Add Mapping</button>
+        </div>
+    </form>
+      <form id="erase-all" method="post" action="{{ url_for('mappings_erase') }}" style="margin-top:1rem">
+        <button type="submit" class="danger">Erase all mappings</button>
+      </form>
+
+    <h3>Existing mappings</h3>
+    <ul>
+      {% for cid, m in config.get('mappings', {}).items() %}
+        <li>
+          <strong>{{ cid }}</strong> → {{ m.type }} : {{ m.id }}
+          <form method="post" action="{{ url_for('mappings_delete') }}" style="display:inline;margin-left:1rem">
+            <input type="hidden" name="card_id" value="{{ cid }}">
+            <button type="submit" class="small">Delete</button>
+          </form>
+        </li>
+      {% else %}
+        <li>No mappings yet</li>
+      {% endfor %}
+    </ul>
+  </section>
+  <script>
+  async function loadPlaylists(){
+    const res = await fetch('/api/playlists');
+    const j = await res.json();
+    const sel = document.getElementById('playlist-select');
+    sel.innerHTML = '';
+    const pls = j.playlists || [];
+    const noPlaylists = (pls.length===0);
+    if(noPlaylists){
+      const opt = document.createElement('option'); opt.text = '(no local playlists found)'; sel.add(opt);
+    } else {
+      for(const p of pls){
+        const opt = document.createElement('option'); opt.value = p.path; opt.text = p.name; sel.add(opt);
+      }
+      const other = document.createElement('option'); other.value = '__other__'; other.text = 'Other...'; sel.add(other);
+    }
+    // If no playlists, disable add button for local unless manual path entered
+    const addBtn = document.getElementById('add-btn');
+    function updateAddState(){
+      const type = document.getElementById('type').value;
+      const manualVal = document.getElementById('manual-path').value.trim();
+      if(type==='local' && noPlaylists && !manualVal){
+        addBtn.disabled = true;
+      } else addBtn.disabled = false;
+    }
+    document.getElementById('manual-path').addEventListener('input', updateAddState);
+    document.getElementById('type').addEventListener('change', updateAddState);
+    updateAddState();
+  }
+  document.getElementById('playlist-select').addEventListener('change', (e)=>{
+    const manual = document.getElementById('playlist-manual');
+    if(e.target.value==='__other__'){
+      manual.style.display='block';
+      document.getElementById('manual-path').value='';
+    } else manual.style.display='none';
+  });
+  document.getElementById('type').addEventListener('change', (e)=>{
+    const selLabel = document.getElementById('playlist-label');
+    if(e.target.value==='spotify'){
+      document.getElementById('playlist-label-text').innerText = 'Playlist URI or ID';
+      document.getElementById('playlist-select').style.display='none';
+      document.getElementById('playlist-manual').style.display='block';
+    } else {
+      document.getElementById('playlist-label-text').innerText = 'Playlist';
+      document.getElementById('playlist-select').style.display='inline-block';
+      document.getElementById('playlist-manual').style.display='none';
+    }
+  });
+
+  // Before submitting the add mapping form, ensure correct field names are set
+  document.getElementById('add-mapping').addEventListener('submit', (ev)=>{
+    const type = document.getElementById('type').value;
+    const sel = document.getElementById('playlist-select');
+    const manual = document.getElementById('manual-path');
+    const card = document.getElementById('card-input').value.trim();
+    if(!card){ ev.preventDefault(); alert('Card ID cannot be empty'); return; }
+    // remove any existing named inputs we use for submission
+    sel.removeAttribute('name');
+    manual.removeAttribute('name');
+    if(type==='spotify'){
+      // client-side validation for Spotify URI/ID
+      const v = manual.value.trim();
+      if(!v){ ev.preventDefault(); alert('Please provide a Spotify playlist URI or ID'); return; }
+      const uriPattern = /^(spotify:playlist:[a-zA-Z0-9]+|[A-Za-z0-9]{22,}|https:\/\/open\.spotify\.com\/playlist\/[A-Za-z0-9]+)/;
+      if(!uriPattern.test(v)){
+        if(!confirm('The value does not look like a Spotify URI or ID. Submit anyway?')){ ev.preventDefault(); return; }
+      }
+      manual.setAttribute('name','playlist_id');
+    } else {
+      if(sel.value==='__other__'){
+        if(!manual.value.trim()){ ev.preventDefault(); alert('Please provide a path for the playlist'); return; }
+        manual.setAttribute('name','playlist_id');
+      } else {
+        sel.setAttribute('name','playlist_id');
+      }
+    }
+  });
+
+  loadPlaylists();
+  // attach confirm to delete forms
+  document.querySelectorAll("form[action='{{ url_for('mappings_delete') }}']").forEach(f=>{
+    f.addEventListener('submit', (ev)=>{
+      if(!confirm('Delete this mapping?')) ev.preventDefault();
+    });
+  });
+  // confirm erase all
+  document.getElementById('erase-all').addEventListener('submit', (ev)=>{
+    if(!confirm('Erase ALL mappings? This cannot be undone.')) ev.preventDefault();
+  });
+  </script>
+{% endblock %}

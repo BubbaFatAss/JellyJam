@@ -1,0 +1,73 @@
+{% extends 'base.html' %}
+{% block content %}
+  <section class="panel">
+    <h2>Now Playing</h2>
+    <div id="np">
+      <div style="display:flex;gap:1rem;align-items:center">
+        <img id="album-art" src="" alt="album art" style="width:120px;height:120px;object-fit:cover;border-radius:8px">
+        <div>
+          <div><strong id="title">-</strong></div>
+          <div id="artist">-</div>
+          <div id="album">-</div>
+        </div>
+      </div>
+      <div style="margin-top:1rem">
+        <button id="prev">⏮</button>
+        <button id="playpause">⏯</button>
+        <button id="next">⏭</button>
+        <select id="device-select" style="margin-left:1rem"></select>
+      </div>
+      <div style="margin-top:1rem">
+        <input id="seek" type="range" min="0" max="100" value="0" style="width:100%">
+        <div><span id="pos">0:00</span> / <span id="dur">0:00</span></div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+  let polling = null;
+  async function fetchNow(){
+    const r = await fetch('/api/nowplaying');
+    const j = await r.json();
+    document.getElementById('title').innerText = j.title || '-';
+    document.getElementById('artist').innerText = j.artist || '-';
+    document.getElementById('album').innerText = j.album || '-';
+    const pos = j.position_ms || 0; const dur = j.duration_ms || 0;
+    document.getElementById('pos').innerText = msToTime(pos);
+    document.getElementById('dur').innerText = msToTime(dur);
+    const pct = dur? Math.floor((pos/dur)*100):0;
+    document.getElementById('seek').value = pct;
+    const img = j.image_url || '';
+    document.getElementById('album-art').src = img;
+    document.getElementById('playpause').innerText = j.playing? '⏸':'⏯';
+  }
+  function msToTime(ms){
+    const s = Math.floor(ms/1000); const m = Math.floor(s/60); const sec = s%60; return `${m}:${sec.toString().padStart(2,'0')}`;
+  }
+  document.getElementById('playpause').addEventListener('click', async ()=>{
+    const action = document.getElementById('playpause').innerText==='⏯'?'play':'pause';
+    await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});
+    setTimeout(fetchNow,300);
+  });
+  document.getElementById('next').addEventListener('click', async ()=>{ await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'next'})}); setTimeout(fetchNow,300); });
+  document.getElementById('prev').addEventListener('click', async ()=>{ await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'previous'})}); setTimeout(fetchNow,300); });
+  // device selection
+  async function loadDevices(){
+    const r = await fetch('/api/spotify/devices'); const j = await r.json();
+    const sel = document.getElementById('device-select'); sel.innerHTML='';
+    if(!j.devices || j.devices.length===0){ sel.disabled=true; sel.add(new Option('(no devices)', '')); return; }
+    sel.disabled=false;
+    for(const d of j.devices){ sel.add(new Option(`${d.name} (${d.type})`, d.id)); }
+    if(j.selected) sel.value = j.selected;
+    sel.addEventListener('change', async ()=>{ await fetch('/api/spotify/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:sel.value})}); });
+  }
+  document.getElementById('seek').addEventListener('input', async (e)=>{
+    const pct = Number(e.target.value);
+    const r = await fetch('/api/nowplaying'); const j = await r.json(); const dur = j.duration_ms||0; const pos = Math.floor(dur * pct/100);
+    await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'seek',position_ms:pos})});
+    setTimeout(fetchNow,200);
+  });
+  polling = setInterval(fetchNow, 1000);
+  fetchNow();
+  </script>
+{% endblock %}

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>JellyJam NFC Player</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <header>
+      <h1>JellyJam NFC Player</h1>
+      <nav>
+        <a href="{{ url_for('index') }}">Home</a>
+        <a href="{{ url_for('spotify_config') }}">Spotify</a>
+        <a href="{{ url_for('mappings') }}">Mappings</a>
+        <a href="{{ url_for('simulate') }}">Simulate</a>
+      </nav>
+    </header>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+    <footer>
+      <small>JellyJam • Raspberry Pi NFC player</small>
+    </footer>
+  </body>
+</html>

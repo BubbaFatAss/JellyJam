@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+{% block content %}
+  <section class="panel">
+    <h2>Now Playing</h2>
+    <div id="np">
+      <div style="display:flex;gap:1rem;align-items:center">
+        <img id="album-art" src="" alt="album art" style="width:120px;height:120px;object-fit:cover;border-radius:8px">
+        <div>
+          <div><strong id="title">-</strong></div>
+          <div id="artist">-</div>
+          <div id="album">-</div>
+        </div>
+      </div>
+      <div style="margin-top:1rem">
+        <button id="prev">⏮</button>
+        <button id="playpause">⏯</button>
+  <button id="stop" style="margin-left:.5rem;">⏹</button>
+        <button id="next">⏭</button>
+      </div>
+      <div style="margin-top:1rem">
+        <input id="seek" type="range" min="0" max="100" value="0" style="width:100%">
+        <div><span id="pos">0:00</span> / <span id="dur">0:00</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Quick actions</h2>
+    <button id="refresh">Refresh status</button>
+    <button id="list-mappings">Show mappings</button>
+    <div id="mappings"></div>
+  </section>
+
+  <script>
+  // Now Playing logic (moved from now_playing.html)
+  let polling = null;
+  async function fetchNow(){
+    const r = await fetch('/api/nowplaying');
+    const j = await r.json();
+    function valOrDash(v){ return (v === null || v === undefined || v === '' || v === -1)? '-' : v; }
+    document.getElementById('title').innerText = valOrDash(j.title);
+    document.getElementById('artist').innerText = valOrDash(j.artist);
+    document.getElementById('album').innerText = valOrDash(j.album);
+    const posRaw = j.position_ms;
+    const durRaw = j.duration_ms;
+    // Show dashes when values are missing or invalid (for stopped playback some backends return -1)
+    if (typeof posRaw === 'number' && typeof durRaw === 'number' && durRaw > 0 && posRaw >= 0){
+      document.getElementById('pos').innerText = msToTime(posRaw);
+      document.getElementById('dur').innerText = msToTime(durRaw);
+      const pct = Math.floor((posRaw/durRaw)*100);
+      document.getElementById('seek').value = pct;
+      document.getElementById('seek').disabled = false;
+    } else {
+      document.getElementById('pos').innerText = '-';
+      document.getElementById('dur').innerText = '-';
+      document.getElementById('seek').value = 0;
+      document.getElementById('seek').disabled = true;
+    }
+  const img = (j.image_url === null || j.image_url === undefined || j.image_url === -1)? '' : j.image_url || '';
+  document.getElementById('album-art').src = img || '/static/placeholder_artwork.svg';
+    document.getElementById('playpause').innerText = j.playing? '⏸':'⏯';
+  }
+  function msToTime(ms){
+    const s = Math.floor(ms/1000); const m = Math.floor(s/60); const sec = s%60; return `${m}:${sec.toString().padStart(2,'0')}`;
+  }
+  document.getElementById('playpause').addEventListener('click', async ()=>{
+    const action = document.getElementById('playpause').innerText==='⏯'?'play':'pause';
+    await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});
+    setTimeout(fetchNow,300);
+  });
+  document.getElementById('next').addEventListener('click', async ()=>{ await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'next'})}); setTimeout(fetchNow,300); });
+  document.getElementById('prev').addEventListener('click', async ()=>{ await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'previous'})}); setTimeout(fetchNow,300); });
+  document.getElementById('stop').addEventListener('click', async ()=>{ await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'stop'})}); setTimeout(fetchNow,300); });
+  // device selection handled on the Spotify settings page
+  document.getElementById('seek').addEventListener('input', async (e)=>{
+    const pct = Number(e.target.value);
+    const r = await fetch('/api/nowplaying'); const j = await r.json(); const dur = j.duration_ms||0; const pos = Math.floor(dur * pct/100);
+    await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'seek',position_ms:pos})});
+    setTimeout(fetchNow,200);
+  });
+  polling = setInterval(fetchNow, 1000);
+  fetchNow();
+  document.getElementById('list-mappings').addEventListener('click', async ()=>{
+    const r = await fetch('/mappings');
+    const html = await r.text();
+    document.getElementById('mappings').innerHTML = html;
+  });
+  // device selection handled on the Spotify settings page; loadDevices removed
+  </script>
+{% endblock %}
