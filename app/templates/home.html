@@ -21,14 +21,26 @@
         <input id="seek" type="range" min="0" max="100" value="0" style="width:100%">
         <div><span id="pos">0:00</span> / <span id="dur">0:00</span></div>
       </div>
+      <div style="margin-top:1rem">
+        <label for="volume">Volume</label>
+        <input id="volume" type="range" min="0" max="100" value="50" style="width:100%">
+      </div>
+      <div style="margin-top:1rem;display:flex;gap:.5rem;align-items:center">
+        <button id="shuffle-btn" title="Toggle shuffle" class="icon-btn"><svg><use xlink:href="#icon-shuffle"></use></svg></button>
+        <button id="repeat-btn" title="Toggle repeat" class="icon-btn"><svg><use xlink:href="#icon-repeat"></use></svg></button>
+      </div>
     </div>
   </section>
 
   <section class="panel">
-    <h2>Quick actions</h2>
-    <button id="refresh">Refresh status</button>
-    <button id="list-mappings">Show mappings</button>
-    <div id="mappings"></div>
+    <h2>Mappings</h2>
+    <div id="quick-mappings">
+      <label for="mapping-select">Choose mapping:</label>
+      <select id="mapping-select" style="min-width:220px">
+        <option value="">Loading mappings...</option>
+      </select>
+      <button id="mapping-play" style="margin-left:.5rem">Play</button>
+    </div>
   </section>
 
   <script>
@@ -80,11 +92,113 @@
   });
   polling = setInterval(fetchNow, 1000);
   fetchNow();
-  document.getElementById('list-mappings').addEventListener('click', async ()=>{
-    const r = await fetch('/mappings');
-    const html = await r.text();
-    document.getElementById('mappings').innerHTML = html;
+  async function loadQuickMappings(){
+    const r = await fetch('/api/mappings');
+    const j = await r.json();
+    const select = document.getElementById('mapping-select');
+    select.innerHTML = '';
+    const maps = j.mappings || [];
+    if(maps.length === 0){
+      select.appendChild(new Option('No mappings configured', ''));
+      document.getElementById('mapping-play').disabled = true;
+      return;
+    }
+    // Add a placeholder option
+    select.appendChild(new Option('-- select a mapping --', ''));
+    for(const m of maps){
+      const label = (m.name && m.name.length>0)? m.name : (m.id || m.card_id);
+      select.appendChild(new Option(label, m.card_id));
+    }
+    document.getElementById('mapping-play').disabled = false;
+  }
+  loadQuickMappings();
+  document.getElementById('mapping-play').addEventListener('click', async ()=>{
+    const sel = document.getElementById('mapping-select');
+    const card = sel.value;
+    if(!card){ return alert('Please select a mapping to play'); }
+    const resp = await fetch('/simulate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({card_id: card})});
+    if(!resp.ok){ const j = await resp.json().catch(()=>({})); return alert('Failed to trigger mapping: '+(j.error||resp.status)); }
+    // After triggering mapping, try to fetch the mapping options and apply them temporarily
+    try{
+      const mapsResp = await fetch('/api/mappings');
+      const mapsJson = await mapsResp.json();
+      const mapping = (mapsJson.mappings||[]).find(x=>x.card_id===card);
+      if(mapping){
+          // Apply mapping options (shuffle/repeat) temporarily
+          await fetch('/api/apply_options', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({shuffle: !!mapping.shuffle, repeat: mapping.repeat || 'off'})});
+          // Update UI toggles
+          setShuffleButton(!!mapping.shuffle);
+          setRepeatButton(mapping.repeat || 'off');
+          showToast(`Applied mapping options — shuffle: ${mapping.shuffle? 'on':'off'}, repeat: ${mapping.repeat||'off'}`);
+        }
+    }catch(e){ /* ignore */ }
   });
+  // Volume handling: load current volume and send changes
+  const volEl = document.getElementById('volume');
+  let volTimeout = null;
+  async function loadVolume(){
+    try{
+      const r = await fetch('/api/volume');
+      const j = await r.json();
+      if(j && typeof j.volume === 'number'){
+        volEl.value = j.volume;
+      }
+    }catch(e){ /* ignore */ }
+  }
+  volEl.addEventListener('input', ()=>{
+    // debounce rapid changes
+    if(volTimeout) clearTimeout(volTimeout);
+    volTimeout = setTimeout(async ()=>{
+      const v = Number(volEl.value);
+      await fetch('/api/control', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:'volume', volume: v})});
+    }, 150);
+  });
+  loadVolume();
+  // Shuffle / Repeat UI wiring
+  const shuffleBtn = document.getElementById('shuffle-btn');
+  const repeatBtn = document.getElementById('repeat-btn');
+  function setShuffleButton(enabled){
+    if(enabled){ shuffleBtn.classList.add('active'); shuffleBtn.dataset.on='1'; }
+    else { shuffleBtn.classList.remove('active'); shuffleBtn.dataset.on='0'; }
+  }
+  // repeatMode can be 'off'|'context'|'track' or a boolean (legacy)
+  function setRepeatButton(repeatMode){
+    let mode = 'off';
+    if(typeof repeatMode === 'string') mode = repeatMode;
+    else mode = repeatMode? 'context':'off';
+    repeatBtn.dataset.repeatMode = mode;
+    if(mode === 'off') repeatBtn.classList.remove('active'); else repeatBtn.classList.add('active');
+    repeatBtn.title = `Repeat: ${mode}`;
+  }
+  async function loadOptions(){
+    try{
+      const r = await fetch('/api/options'); const j = await r.json(); const o = j.options||{};
+      setShuffleButton(!!o.shuffle);
+      setRepeatButton(!!o.repeat);
+    }catch(e){ /* ignore */ }
+  }
+  shuffleBtn.addEventListener('click', async ()=>{
+    const enabled = shuffleBtn.dataset.on!=='1';
+    // persist
+    await fetch('/api/options', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({shuffle: enabled})});
+    // apply temporarily
+    await fetch('/api/apply_options', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({shuffle: enabled})});
+    setShuffleButton(enabled);
+    showToast(enabled? 'Shuffle enabled':'Shuffle disabled');
+  });
+  // repeat cycles: off -> context -> track -> off
+  repeatBtn.addEventListener('click', async ()=>{
+    const current = repeatBtn.dataset.repeatMode || 'off';
+    const order = ['off','context','track'];
+    const next = order[(order.indexOf(current)+1) % order.length];
+    // persist
+    await fetch('/api/options', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repeat: next})});
+    // apply temporarily
+    await fetch('/api/apply_options', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repeat: next})});
+    setRepeatButton(next);
+    showToast(`Repeat set to ${next}`);
+  });
+  loadOptions();
   // device selection handled on the Spotify settings page; loadDevices removed
   </script>
 {% endblock %}

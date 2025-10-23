@@ -4,11 +4,16 @@
     <h2>Mappings</h2>
     <form id="add-mapping" method="post" action="{{ url_for('mappings') }}">
       <label>Card ID <input id="card-input" name="card_id"></label>
+      <div id="add-error" role="alert" style="color:#b91c1c;display:none;margin-top:0.25rem"></div>
       <label>Type <select id="type" name="type"><option value="local">Local</option><option value="spotify">Spotify</option></select></label>
+      <label>Volume override (0-100, leave blank for no override)
+        <input id="volume-input" name="volume" placeholder="e.g. 75" pattern="^\s*$|^\d{1,3}$">
+  <small class="help"></small>
+      </label>
       <label id="playlist-label"><span id="playlist-label-text">Playlist</span>
         <select id="playlist-select" name="playlist_select"><option>Loading...</option></select>
       </label>
-  <label id="playlist-manual" style="display:none"><input id="manual-path" name="manual_path" placeholder="Playlist URI or ID"></label>
+      <label id="playlist-manual" style="display:none"><input id="manual-path" name="manual_path" placeholder="Playlist URI or ID"></label>
       <div class="form-actions">
           <button type="submit" id="add-btn">Add Mapping</button>
         </div>
@@ -18,108 +23,233 @@
       </form>
 
     <h3>Existing mappings</h3>
-    <ul>
-      {% for cid, m in config.get('mappings', {}).items() %}
-        <li>
-          <strong>{{ cid }}</strong> → {{ m.type }} : {{ m.id }}
-          <form method="post" action="{{ url_for('mappings_delete') }}" style="display:inline;margin-left:1rem">
-            <input type="hidden" name="card_id" value="{{ cid }}">
-            <button type="submit" class="small">Delete</button>
-          </form>
-        </li>
-      {% else %}
-        <li>No mappings yet</li>
-      {% endfor %}
+    <ul id="mappings-list">
+      <li>Loading…</li>
     </ul>
   </section>
   <script>
-  async function loadPlaylists(){
-    const res = await fetch('/api/playlists');
-    const j = await res.json();
-    const sel = document.getElementById('playlist-select');
-    sel.innerHTML = '';
-    const pls = j.playlists || [];
-    const noPlaylists = (pls.length===0);
-    if(noPlaylists){
-      const opt = document.createElement('option'); opt.text = '(no local playlists found)'; sel.add(opt);
-    } else {
-      for(const p of pls){
-        const opt = document.createElement('option'); opt.value = p.path; opt.text = p.name; sel.add(opt);
-      }
-      const other = document.createElement('option'); other.value = '__other__'; other.text = 'Other...'; sel.add(other);
+  (function(){
+    // Helper: validate volume input element value (allow blank) and return normalized value or null
+    function validateVolumeValue(val){
+      const s = (val||'').toString().trim();
+      if(s==='') return null;
+      if(!/^\d+$/.test(s)) return NaN;
+      const n = parseInt(s,10);
+      if(n < 0) return 0;
+      if(n > 100) return 100;
+      return n;
     }
-    // If no playlists, disable add button for local unless manual path entered
-    const addBtn = document.getElementById('add-btn');
-    function updateAddState(){
-      const type = document.getElementById('type').value;
-      const manualVal = document.getElementById('manual-path').value.trim();
-      if(type==='local' && noPlaylists && !manualVal){
-        addBtn.disabled = true;
-      } else addBtn.disabled = false;
-    }
-    document.getElementById('manual-path').addEventListener('input', updateAddState);
-    document.getElementById('type').addEventListener('change', updateAddState);
-    updateAddState();
-  }
-  document.getElementById('playlist-select').addEventListener('change', (e)=>{
-    const manual = document.getElementById('playlist-manual');
-    if(e.target.value==='__other__'){
-      manual.style.display='block';
-      document.getElementById('manual-path').value='';
-    } else manual.style.display='none';
-  });
-  document.getElementById('type').addEventListener('change', (e)=>{
-    const selLabel = document.getElementById('playlist-label');
-    if(e.target.value==='spotify'){
-      document.getElementById('playlist-label-text').innerText = 'Playlist URI or ID';
-      document.getElementById('playlist-select').style.display='none';
-      document.getElementById('playlist-manual').style.display='block';
-    } else {
-      document.getElementById('playlist-label-text').innerText = 'Playlist';
-      document.getElementById('playlist-select').style.display='inline-block';
-      document.getElementById('playlist-manual').style.display='none';
-    }
-  });
 
-  // Before submitting the add mapping form, ensure correct field names are set
-  document.getElementById('add-mapping').addEventListener('submit', (ev)=>{
-    const type = document.getElementById('type').value;
-    const sel = document.getElementById('playlist-select');
-    const manual = document.getElementById('manual-path');
-    const card = document.getElementById('card-input').value.trim();
-    if(!card){ ev.preventDefault(); alert('Card ID cannot be empty'); return; }
-    // remove any existing named inputs we use for submission
-    sel.removeAttribute('name');
-    manual.removeAttribute('name');
-    if(type==='spotify'){
-      // client-side validation for Spotify URI/ID
-      const v = manual.value.trim();
-      if(!v){ ev.preventDefault(); alert('Please provide a Spotify playlist URI or ID'); return; }
-      const uriPattern = /^(spotify:playlist:[a-zA-Z0-9]+|[A-Za-z0-9]{22,}|https:\/\/open\.spotify\.com\/playlist\/[A-Za-z0-9]+)/;
-      if(!uriPattern.test(v)){
-        if(!confirm('The value does not look like a Spotify URI or ID. Submit anyway?')){ ev.preventDefault(); return; }
-      }
-      manual.setAttribute('name','playlist_id');
-    } else {
-      if(sel.value==='__other__'){
-        if(!manual.value.trim()){ ev.preventDefault(); alert('Please provide a path for the playlist'); return; }
-        manual.setAttribute('name','playlist_id');
+    async function loadPlaylists(){
+      const res = await fetch('/api/playlists');
+      const j = await res.json();
+      const sel = document.getElementById('playlist-select');
+      sel.innerHTML = '';
+      const pls = j.playlists || [];
+      const noPlaylists = (pls.length===0);
+      if(noPlaylists){
+        const opt = document.createElement('option'); opt.text = '(no local playlists found)'; sel.add(opt);
       } else {
-        sel.setAttribute('name','playlist_id');
+        for(const p of pls){
+          const opt = document.createElement('option'); opt.value = p.path; opt.text = p.name; sel.add(opt);
+        }
+        const other = document.createElement('option'); other.value = '__other__'; other.text = 'Other...'; sel.add(other);
       }
+      // If no playlists, disable add button for local unless manual path entered
+      const addBtn = document.getElementById('add-btn');
+      function updateAddState(){
+        const type = document.getElementById('type').value;
+        const manualVal = document.getElementById('manual-path').value.trim();
+        if(type==='local' && noPlaylists && !manualVal){
+          addBtn.disabled = true;
+        } else addBtn.disabled = false;
+      }
+      document.getElementById('manual-path').addEventListener('input', updateAddState);
+      document.getElementById('type').addEventListener('change', updateAddState);
+      updateAddState();
     }
-  });
 
-  loadPlaylists();
-  // attach confirm to delete forms
-  document.querySelectorAll("form[action='{{ url_for('mappings_delete') }}']").forEach(f=>{
-    f.addEventListener('submit', (ev)=>{
-      if(!confirm('Delete this mapping?')) ev.preventDefault();
+    document.getElementById('playlist-select').addEventListener('change', (e)=>{
+      const manual = document.getElementById('playlist-manual');
+      if(e.target.value==='__other__'){
+        manual.style.display='block';
+        document.getElementById('manual-path').value='';
+      } else manual.style.display='none';
     });
-  });
-  // confirm erase all
-  document.getElementById('erase-all').addEventListener('submit', (ev)=>{
-    if(!confirm('Erase ALL mappings? This cannot be undone.')) ev.preventDefault();
-  });
+    document.getElementById('type').addEventListener('change', (e)=>{
+      const selLabel = document.getElementById('playlist-label');
+      if(e.target.value==='spotify'){
+        document.getElementById('playlist-label-text').innerText = 'Playlist URI or ID';
+        document.getElementById('playlist-select').style.display='none';
+        document.getElementById('playlist-manual').style.display='block';
+      } else {
+        document.getElementById('playlist-label-text').innerText = 'Playlist';
+        document.getElementById('playlist-select').style.display='inline-block';
+        document.getElementById('playlist-manual').style.display='none';
+      }
+    });
+
+    // Fetch and render mappings
+    async function refreshMappingsList(){
+      try{
+        const res = await fetch('/api/mappings');
+        const j = await res.json();
+        const ul = document.getElementById('mappings-list');
+        ul.innerHTML = '';
+        const list = j.mappings || [];
+        if(list.length===0){ ul.appendChild(document.createElement('li')).innerText='No mappings yet'; return; }
+        for(const m of list){
+          const li = document.createElement('li');
+          li.setAttribute('data-card-id', m.card_id);
+          const strong = document.createElement('strong'); strong.innerText = m.card_id;
+          const spanType = document.createElement('span'); spanType.className='map-type'; spanType.innerText = m.type;
+          const spanId = document.createElement('span'); spanId.className='map-id'; spanId.innerText = m.id;
+          const spanOpts = document.createElement('span'); spanOpts.className='map-options';
+          spanOpts.innerText = `[Shuffle: ${m.shuffle? 'yes':'no'}, Repeat: ${m.repeat && m.repeat !== 'off' ? 'yes':'no'}${m.volume!=null ? ', Volume: '+m.volume : ''}]`;
+          const editBtn = document.createElement('button'); editBtn.className='edit-mapping small'; editBtn.innerText='Edit';
+          editBtn.addEventListener('click', ()=>{ openInlineEditor(li, m); });
+          const delForm = document.createElement('form'); delForm.method='post'; delForm.action='{{ url_for("mappings_delete") }}'; delForm.style.display='inline'; delForm.style.marginLeft='1rem';
+          const hid = document.createElement('input'); hid.type='hidden'; hid.name='card_id'; hid.value = m.card_id; delForm.appendChild(hid);
+          const delBtn = document.createElement('button'); delBtn.type='submit'; delBtn.className='small'; delBtn.innerText='Delete'; delForm.appendChild(delBtn);
+          delForm.addEventListener('submit', (ev)=>{ if(!confirm('Delete this mapping?')) ev.preventDefault(); });
+          li.appendChild(strong); li.appendChild(document.createTextNode(' → ')); li.appendChild(spanType); li.appendChild(document.createTextNode(' : ')); li.appendChild(spanId); li.appendChild(spanOpts); li.appendChild(editBtn); li.appendChild(delForm);
+          ul.appendChild(li);
+        }
+      }catch(err){ console.error('Failed to refresh mappings',err); }
+    }
+
+    // Add mapping via AJAX (single-page)
+    document.getElementById('add-mapping').addEventListener('submit', async (ev)=>{
+      ev.preventDefault();
+      const type = document.getElementById('type').value;
+      const sel = document.getElementById('playlist-select');
+      const manual = document.getElementById('manual-path');
+      const card = document.getElementById('card-input').value.trim();
+      const addErrorEl = document.getElementById('add-error'); addErrorEl.style.display='none'; addErrorEl.innerText='';
+      if(!card){ addErrorEl.innerText='Card ID cannot be empty'; addErrorEl.style.display='block'; return; }
+      // prepare formdata
+      const fd = new FormData();
+      fd.append('card_id', card);
+      fd.append('type', type);
+      // playlist selection
+      if(type === 'spotify'){
+        const v = manual.value.trim();
+        if(!v){ addErrorEl.innerText='Please provide a Spotify playlist URI or ID'; addErrorEl.style.display='block'; return; }
+        const uriPattern = /^(spotify:playlist:[a-zA-Z0-9]+|[A-Za-z0-9]{22,}|https:\/\/open\.spotify\.com\/playlist\/[A-Za-z0-9]+)/;
+        if(!uriPattern.test(v)){
+          if(!confirm('The value does not look like a Spotify URI or ID. Submit anyway?')){ return; }
+        }
+        fd.append('playlist_id', v);
+      } else {
+        if(sel.value === '__other__'){
+          if(!manual.value.trim()){ addErrorEl.innerText='Please provide a path for the playlist'; addErrorEl.style.display='block'; return; }
+          fd.append('playlist_id', manual.value.trim());
+        } else {
+          fd.append('playlist_id', sel.value);
+        }
+      }
+      // volume
+      const volEl = document.getElementById('volume-input');
+      if(volEl){
+        const volVal = validateVolumeValue(volEl.value);
+        if(Number.isNaN(volVal)){
+          addErrorEl.innerText='Volume must be an integer between 0 and 100, or left blank for no override'; addErrorEl.style.display='block'; return;
+        }
+        if(volVal !== null) fd.append('volume', volVal);
+      }
+
+      // submit via fetch
+      try{
+        const res = await fetch('{{ url_for("mappings") }}', { method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, body: fd });
+        if(res.ok){
+          try{ showToast('Mapping added', 2500); }catch(e){}
+          // clear form
+          document.getElementById('card-input').value = '';
+          document.getElementById('manual-path').value = '';
+          if(volEl) volEl.value='';
+          await refreshMappingsList();
+        } else {
+          const txt = await res.text(); addErrorEl.innerText = 'Add failed: '+res.status; addErrorEl.style.display='block';
+        }
+      }catch(err){ console.error(err); alert('Network error adding mapping'); }
+    });
+
+    // Inline editor with playlist wiring
+    function openInlineEditor(li, mapping){
+      const form = document.createElement('form'); form.style.marginTop='0.5rem';
+      form.innerHTML = `
+        <input type="hidden" name="card_id" value="${mapping.card_id}">
+        <label>Type <select name="type"><option value="local">Local</option><option value="spotify">Spotify</option></select></label>
+        <label>Playlist <select name="playlist_id" class="inline-playlist"></select><input type="text" name="playlist_manual" class="inline-manual" style="display:none;width:100%"></label>
+        <label>Shuffle <input type="checkbox" name="shuffle" ${mapping.shuffle? 'checked':''}></label>
+        <label>Repeat <input type="checkbox" name="repeat" ${mapping.repeat && mapping.repeat !== 'off'? 'checked':''}></label>
+        <label>Volume override (0-100, blank = no override)
+          <input name="volume" placeholder="e.g. 75" value="${mapping.volume!=null?mapping.volume:''}">
+          <small class="help"></small>
+        </label>
+        <div><span class="edit-error" style="color:#b91c1c;display:none;margin-right:1rem"></span><button type="submit">Save</button> <button type="button" class="cancel-edit">Cancel</button></div>
+      `;
+      li.style.display='none';
+      li.parentNode.insertBefore(form, li.nextSibling);
+
+      const playlistSelect = form.querySelector('.inline-playlist');
+      const playlistManual = form.querySelector('.inline-manual');
+      // populate playlistSelect with same data as main page
+      (async ()=>{
+        const res = await fetch('/api/playlists');
+        const j = await res.json();
+        playlistSelect.innerHTML = '';
+        for(const p of j.playlists || []){
+          const opt = document.createElement('option'); opt.value = p.path; opt.text = p.name; playlistSelect.add(opt);
+        }
+        const other = document.createElement('option'); other.value='__other__'; other.text='Other...'; playlistSelect.add(other);
+        // set initial value
+        if(mapping.type==='local'){
+          // try to select existing path
+          let found = false;
+          for(const o of playlistSelect.options){ if(o.value===mapping.id){ o.selected = true; found=true; break; } }
+          if(!found){ playlistSelect.value='__other__'; playlistManual.style.display='block'; playlistManual.value = mapping.id || ''; }
+        } else {
+          // spotify mapping: show manual
+          playlistSelect.style.display='none'; playlistManual.style.display='block'; playlistManual.value = mapping.id || '';
+          form.querySelector('select[name="type"]').value='spotify';
+        }
+      })();
+
+      form.querySelector('.cancel-edit').addEventListener('click', ()=>{ form.remove(); li.style.display='block'; });
+
+      form.addEventListener('submit', async (ev)=>{
+        ev.preventDefault();
+        const errEl = form.querySelector('.edit-error'); errEl.style.display='none'; errEl.innerText='';
+        // assemble payload
+        const fd = new FormData(form);
+        // if inline playlist select is visible and value is __other__, append from manual
+        const ps = playlistSelect.style.display !== 'none' ? playlistSelect.value : '__manual__';
+        if(ps === '__other__'){
+          const manualVal = playlistManual.value.trim();
+          if(!manualVal){ errEl.innerText='Please provide a playlist path/URI'; errEl.style.display='inline-block'; return; }
+          fd.set('playlist_id', manualVal);
+        } else if(ps === '__manual__'){
+          fd.set('playlist_id', playlistManual.value.trim());
+        } else {
+          fd.set('playlist_id', ps);
+        }
+        // validate volume
+        const volInput = form.querySelector('input[name="volume"]');
+        if(volInput){ const v = validateVolumeValue(volInput.value); if(Number.isNaN(v)){ errEl.innerText='Volume must be an integer 0-100'; errEl.style.display='inline-block'; return; } if(v!==null) volInput.value = v; }
+        try{
+          const res = await fetch('{{ url_for("mappings") }}', { method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, body: fd });
+          if(res.ok){ showToast('Mapping saved',2000); form.remove(); await refreshMappingsList(); } else { const txt = await res.text(); errEl.innerText='Save failed: '+res.status; errEl.style.display='inline-block'; }
+        }catch(err){ console.error(err); errEl.innerText='Network error'; errEl.style.display='inline-block'; }
+      });
+    }
+
+    // bind page actions
+    document.getElementById('erase-all').addEventListener('submit', (ev)=>{ if(!confirm('Erase ALL mappings? This cannot be undone.')) ev.preventDefault(); });
+
+    // initial load
+    loadPlaylists();
+    refreshMappingsList();
+  })();
   </script>
-{% endblock %}
+  {% endblock %}

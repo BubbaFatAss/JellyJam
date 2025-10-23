@@ -12,25 +12,45 @@ class LocalPlayer:
         # default base music directory relative to repo root
         import os
         self.base = os.path.abspath(os.path.join(os.getcwd(), 'music'))
+        # internal state for repeat/shuffle monitoring and control
+        self._shuffle = False
+        self._repeat_mode = 'off'
+        self._end_count = 0
+        self._total_items = 0
+        self._monitor_lock = threading.Lock()
+        self._user_stopped = False
 
     def _clear(self):
         self.media_list = self.instance.media_list_new()
         self.player.set_media_list(self.media_list)
 
-    def play_playlist(self, playlist_id):
+    def play_playlist(self, playlist_id, shuffle=False, repeat_mode='off', volume=None):
         # playlist_id may be a directory path or an m3u file
+        # If something is currently playing, stop it first to ensure a clean transition
+        try:
+            with self._monitor_lock:
+                self._user_stopped = False
+        except Exception:
+            pass
+        try:
+            # stop current playback to allow replacing media list
+            self.player.stop()
+        except Exception:
+            pass
         self._clear()
+        self._shuffle = bool(shuffle)
+        self._repeat_mode = repeat_mode  # 'off', 'context', 'track'
         # if a relative path is provided, try resolving it against base
         if not os.path.isabs(playlist_id):
             candidate = os.path.join(self.base, playlist_id)
             if os.path.exists(candidate):
                 playlist_id = candidate
+        files = []
         if os.path.isdir(playlist_id):
             for fn in sorted(os.listdir(playlist_id)):
                 path = os.path.join(playlist_id, fn)
                 if os.path.isfile(path):
-                    m = self.instance.media_new(path)
-                    self.media_list.add_media(m)
+                    files.append(path)
         elif os.path.isfile(playlist_id) and playlist_id.lower().endswith('.m3u'):
             with open(playlist_id, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -38,13 +58,103 @@ class LocalPlayer:
                     if not line or line.startswith('#'):
                         continue
                     if os.path.isabs(line) and os.path.exists(line):
-                        m = self.instance.media_new(line)
-                        self.media_list.add_media(m)
+                        files.append(line)
         else:
             print('Unknown playlist:', playlist_id)
             return
+        # apply shuffle if requested
+        try:
+            import random
+            if self._shuffle:
+                random.shuffle(files)
+        except Exception:
+            pass
+        # add files to media list
+        for path in files:
+            try:
+                m = self.instance.media_new(path)
+                self.media_list.add_media(m)
+            except Exception:
+                logging.exception('Failed adding media %s', path)
         self.player.set_media_list(self.media_list)
+        # track total items for fallback looping
+        try:
+            self._total_items = self.media_list.count()
+        except Exception:
+            self._total_items = len(files)
+        # reset end-of-track counter and user stop flag
+        with self._monitor_lock:
+            self._end_count = 0
+            self._user_stopped = False
+        # set playback mode for context repeat if supported
+        try:
+            pm = getattr(vlc, 'PlaybackMode', None)
+            if pm is not None:
+                if self._repeat_mode == 'context' and hasattr(self.player, 'set_playback_mode'):
+                    # try to set loop mode
+                    try:
+                        self.player.set_playback_mode(getattr(pm, 'loop', getattr(pm, 'repeat', 0)))
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        self.player.set_playback_mode(getattr(pm, 'default', 0))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # attach end-of-track handler for 'track' repeat
+        try:
+            mp = self.player.get_media_player()
+            em = mp.event_manager()
+            # detach previous handler if any
+            try:
+                em.event_detach(vlc.EventType.MediaPlayerEndReached)
+            except Exception:
+                pass
+            # attach a unified end handler that supports both 'track' and 'context' repeat
+            def _on_end(ev):
+                try:
+                    # track repeat: replay current media immediately
+                    if self._repeat_mode == 'track':
+                        try:
+                            mp.play()
+                        except Exception:
+                            logging.exception('Failed to restart track')
+                        return
+
+                    # context repeat fallback: count end events and when we've seen
+                    # as many ends as there are items, restart the playlist from top
+                    with self._monitor_lock:
+                        self._end_count += 1
+                        total = getattr(self, '_total_items', 0) or 0
+                        # If user explicitly stopped playback, do not auto-restart
+                        if getattr(self, '_user_stopped', False):
+                            return
+                        if self._repeat_mode == 'context' and total > 0 and self._end_count >= total:
+                            # reset counter and restart playlist
+                            self._end_count = 0
+                            try:
+                                # small delay so libVLC can transition cleanly
+                                threading.Timer(0.15, lambda: self.player.play()).start()
+                            except Exception:
+                                logging.exception('Failed to restart playlist on context repeat')
+                except Exception:
+                    logging.exception('Error in end-of-track handler')
+
+            em.event_attach(vlc.EventType.MediaPlayerEndReached, _on_end)
+        except Exception:
+            logging.exception('Failed to attach end event')
+
         self.player.play()
+
+        # apply optional volume override if provided (retry logic inside set_volume)
+        if volume is not None:
+            try:
+                self.set_volume(int(volume))
+            except Exception:
+                pass
 
     def now_playing(self):
         try:
@@ -153,6 +263,56 @@ class LocalPlayer:
         except Exception:
             pass
 
+    def set_volume(self, vol):
+        """Set local VLC player's volume (0-100).
+
+        Sometimes the underlying VLC media player isn't fully initialized immediately
+        after starting playback. In that case, try setting the volume a few times
+        with a short delay in a background thread until it succeeds.
+        """
+        try:
+            v = int(vol)
+        except Exception:
+            return
+        # clamp
+        v = max(0, min(100, v))
+
+        def _try_set():
+            try:
+                mp = self.player.get_media_player()
+                if not mp:
+                    return False
+                mp.audio_set_volume(int(v))
+                return True
+            except Exception:
+                return False
+
+        # try once immediately
+        _try_set()
+
+        # otherwise retry a few times in background
+        def _retry_loop():
+            import time
+            for _ in range(6):
+                time.sleep(0.5)
+                if _try_set():
+                    return
+
+        try:
+            t = threading.Thread(target=_retry_loop, daemon=True)
+            t.start()
+        except Exception:
+            pass
+
+    def get_volume(self):
+        """Get current local VLC player's volume (0-100) or None if unavailable."""
+        try:
+            mp = self.player.get_media_player()
+            v = mp.audio_get_volume()
+            return int(v) if v is not None else None
+        except Exception:
+            return None
+
     def list_playlists(self):
         """Return list of available playlists under the base music directory.
         Directories and .m3u files are considered playlists.
@@ -166,3 +326,33 @@ class LocalPlayer:
             if os.path.isdir(path) or (os.path.isfile(path) and entry.lower().endswith('.m3u')):
                 results.append(path)
         return results
+
+    # Local options are stored in-memory and applied where possible
+    def set_shuffle(self, enabled: bool):
+        # VLC media_list_player does not provide a direct shuffle API; this is a placeholder
+        # for a future implementation where the media list would be randomized when enabled.
+        try:
+            self._shuffle = bool(enabled)
+        except Exception:
+            self._shuffle = False
+
+    def set_repeat(self, enabled: bool):
+        # For backward compatibility this toggles a boolean flag. Prefer using
+        # play_playlist(..., repeat_mode=...) which sets 'off'|'context'|'track'.
+        try:
+            # map boolean to 'context' when True
+            self._repeat_mode = 'context' if bool(enabled) else 'off'
+        except Exception:
+            self._repeat_mode = 'off'
+
+    def get_options(self):
+        return {'shuffle': getattr(self, '_shuffle', False), 'repeat': getattr(self, '_repeat_mode', 'off')}
+
+    def stop(self):
+        """Stop playback and mark as user-stopped to prevent auto-restarts."""
+        try:
+            with self._monitor_lock:
+                self._user_stopped = True
+            self.player.stop()
+        except Exception:
+            logging.exception('Failed to stop local player')

@@ -19,11 +19,26 @@ class Player:
             return
         if mapping['type'] == 'local':
             print(f'Playing local playlist {mapping["id"]}')
-            self.local.play_playlist(mapping['id'])
+            shuffle = bool(mapping.get('shuffle'))
+            repeat_mode = mapping.get('repeat', 'off') or 'off'
+            vol = mapping.get('volume')
+            self.local.play_playlist(mapping['id'], shuffle=shuffle, repeat_mode=repeat_mode, volume=vol)
             self._state.update({'playing': True, 'source': 'local', 'track': mapping['id']})
         elif mapping['type'] == 'spotify':
             print(f'Playing spotify playlist {mapping["id"]}')
             self.spotify.play_playlist(mapping['id'])
+            # apply mapping options for spotify
+            try:
+                self.spotify.set_shuffle(bool(mapping.get('shuffle')))
+                self.spotify.set_repeat(mapping.get('repeat', 'off') or 'off')
+                vol = mapping.get('volume')
+                if vol is not None:
+                    try:
+                        self.spotify.set_volume(int(vol))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             self._state.update({'playing': True, 'source': 'spotify', 'track': mapping['id']})
 
     def status(self):
@@ -64,6 +79,62 @@ class Player:
         elif self._state.get('source') == 'spotify':
             self.spotify.seek(position_ms)
 
+    def set_volume(self, vol):
+        # vol expected 0-100
+        if self._state.get('source') == 'local':
+            try:
+                self.local.set_volume(vol)
+            except Exception:
+                pass
+        elif self._state.get('source') == 'spotify':
+            try:
+                self.spotify.set_volume(vol)
+            except Exception:
+                pass
+
+    def get_volume(self):
+        if self._state.get('source') == 'local':
+            return self.local.get_volume()
+        elif self._state.get('source') == 'spotify':
+            return self.spotify.get_volume()
+        return None
+
+    def apply_options(self, options: dict):
+        """Apply temporary options such as shuffle/repeat to the active player."""
+        if not options:
+            return
+        if self._state.get('source') == 'local':
+            try:
+                if 'shuffle' in options and hasattr(self.local, 'set_shuffle'):
+                    self.local.set_shuffle(bool(options.get('shuffle')))
+                if 'repeat' in options and hasattr(self.local, 'set_repeat'):
+                    self.local.set_repeat(bool(options.get('repeat')))
+            except Exception:
+                pass
+        elif self._state.get('source') == 'spotify':
+            try:
+                if 'shuffle' in options:
+                    self.spotify.set_shuffle(bool(options.get('shuffle')))
+                if 'repeat' in options:
+                    self.spotify.set_repeat(bool(options.get('repeat')))
+            except Exception:
+                pass
+
+    def get_options(self):
+        # Return a dict with current options if available
+        opts = {}
+        if self._state.get('source') == 'local' and hasattr(self.local, 'get_options'):
+            try:
+                return self.local.get_options() or {}
+            except Exception:
+                return {}
+        if self._state.get('source') == 'spotify' and hasattr(self.spotify, 'get_options'):
+            try:
+                return self.spotify.get_options() or {}
+            except Exception:
+                return {}
+        return opts
+
     def now_playing(self):
         # Return a normalized now-playing dict
         if self._state.get('source') == 'local':
@@ -76,7 +147,11 @@ class Player:
         # Stop playback entirely depending on the active source
         if self._state.get('source') == 'local':
             try:
-                self.local.player.stop()
+                # prefer the LocalPlayer.stop if available (sets user stop flag)
+                if hasattr(self.local, 'stop'):
+                    self.local.stop()
+                else:
+                    self.local.player.stop()
             except Exception:
                 pass
             self._state['playing'] = False

@@ -7,6 +7,29 @@
     <link rel="stylesheet" href="/static/style.css">
   </head>
   <body>
+    <!-- SVG sprite icons -->
+    <svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden;">
+      <defs>
+        <symbol id="icon-shuffle" viewBox="0 0 24 24">
+          <path d="M17 3h4v4l-2.5-2.5L17 7V3zm-2.41 4.59L7 15.17 3.83 12l1.41-1.41L7 12.17l7.59-7.58L14.59 7.59zM21 13v8h-8v-2h6v-6h2z"/>
+        </symbol>
+        <symbol id="icon-repeat" viewBox="0 0 24 24">
+          <path d="M7 7h10V4l4 4-4 4V9H7c-1.1 0-2 .9-2 2v6h2v-6c0-1.1.9-2 2-2zm10 10H7v3l-4-4 4-4v3h10c1.1 0 2-.9 2-2v-6h2v6c0 2.21-1.79 4-4 4z"/>
+        </symbol>
+          <symbol id="icon-repeat-one" viewBox="0 0 24 24">
+            <path d="M7 7h10v3l4-4-4-4v3H5a2 2 0 0 0-2 2v4h2V7zM17 17H7v-3l-4 4 4 4v-3h12a2 2 0 0 0 2-2v-4h-2v4z"></path>
+            <path d="M11 10h2v4h-1v1h2v-1h-1v-4h2V9h-5v1z" fill="#000"></path>
+          </symbol>
+        <symbol id="icon-repeat-one" viewBox="0 0 24 24">
+          <path d="M7 7h10V4l4 4-4 4V9H7c-1.1 0-2 .9-2 2v6h2v-6c0-1.1.9-2 2-2zm10 10H7v3l-4-4 4-4v3h10c1.1 0 2-.9 2-2v-6h2v6c0 2.21-1.79 4-4 4z"/>
+          <text x="8" y="16" font-size="10" fill="currentColor">1</text>
+        </symbol>
+        <symbol id="icon-play" viewBox="0 0 24 24">
+          <path d="M8 5v14l11-7z"/>
+        </symbol>
+      </defs>
+    </svg>
+
     <header>
       <h1>JellyJam NFC Player</h1>
       <nav>
@@ -22,5 +45,23 @@
     <footer>
       <small>JellyJam • Raspberry Pi NFC player</small>
     </footer>
+    <!-- Toast container -->
+    <div id="toast" class="jj-toast" aria-live="polite" aria-atomic="true"></div>
+    <script>
+    // Simple toast helper
+    window.showToast = function(msg, timeout){
+      try{
+        const container = document.getElementById('toast');
+        if(!container) return;
+        const el = document.createElement('div');
+        el.className = 'jj-toast-item';
+        el.innerText = msg;
+        container.appendChild(el);
+        setTimeout(()=>{ el.classList.add('visible'); }, 10);
+        const t = timeout || 3000;
+        setTimeout(()=>{ el.classList.remove('visible'); setTimeout(()=>el.remove(),400); }, t);
+      }catch(e){ console.error(e); }
+    };
+    </script>
   </body>
 </html>
