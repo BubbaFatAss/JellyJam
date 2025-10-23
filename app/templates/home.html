@@ -130,6 +130,14 @@
           setShuffleButton(!!mapping.shuffle);
           setRepeatButton(mapping.repeat || 'off');
           showToast(`Applied mapping options — shuffle: ${mapping.shuffle? 'on':'off'}, repeat: ${mapping.repeat||'off'}`);
+          // If mapping provides a volume override, update the volume slider to reflect it without re-sending
+          if(typeof mapping.volume === 'number'){
+            // Temporarily disable input handler to avoid sending another control request
+            const prevHandler = volEl.oninput;
+            volEl.value = mapping.volume;
+            // restore handler (debounced listener below listens to 'input' via addEventListener, so programmatic change shouldn't trigger it)
+            showToast(`Volume set to ${mapping.volume} by mapping`);
+          }
         }
     }catch(e){ /* ignore */ }
   });

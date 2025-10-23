@@ -14,6 +14,18 @@ storage = Storage(os.path.join(data_dir, 'config.json'))
 player = Player(storage)
 nfc = NFCReader(callback=player.handle_nfc)
 
+# restore last volume persisted in storage at startup (best-effort)
+try:
+    cfg = storage.load()
+    last_vol = cfg.get('last_volume')
+    if last_vol is not None:
+        try:
+            player.set_volume(int(last_vol))
+        except Exception:
+            pass
+except Exception:
+    pass
+
 
 @app.route('/')
 def index():
@@ -278,6 +290,13 @@ def api_control():
         except Exception:
             return jsonify({'error': 'invalid volume'}), 400
         player.set_volume(vol_i)
+        # persist last set volume
+        try:
+            cfg = storage.load()
+            cfg['last_volume'] = vol_i
+            storage.save(cfg)
+        except Exception:
+            pass
         return jsonify({'ok': True, 'volume': vol_i})
     return jsonify({'error': 'unknown action'}), 400
 
@@ -286,6 +305,10 @@ def api_control():
 def api_volume():
     # return current volume for active source if available
     vol = player.get_volume()
+    if vol is None:
+        # fall back to last persisted volume if present
+        cfg = storage.load()
+        vol = cfg.get('last_volume')
     return jsonify({'volume': vol})
 
 

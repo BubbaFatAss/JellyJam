@@ -23,6 +23,14 @@ class Player:
             repeat_mode = mapping.get('repeat', 'off') or 'off'
             vol = mapping.get('volume')
             self.local.play_playlist(mapping['id'], shuffle=shuffle, repeat_mode=repeat_mode, volume=vol)
+            # persist last volume
+            try:
+                if vol is not None:
+                    cfg = self.storage.load()
+                    cfg['last_volume'] = int(vol)
+                    self.storage.save(cfg)
+            except Exception:
+                pass
             self._state.update({'playing': True, 'source': 'local', 'track': mapping['id']})
         elif mapping['type'] == 'spotify':
             print(f'Playing spotify playlist {mapping["id"]}')
@@ -35,6 +43,13 @@ class Player:
                 if vol is not None:
                     try:
                         self.spotify.set_volume(int(vol))
+                    except Exception:
+                        pass
+                    # persist last volume
+                    try:
+                        cfg = self.storage.load()
+                        cfg['last_volume'] = int(vol)
+                        self.storage.save(cfg)
                     except Exception:
                         pass
             except Exception:
