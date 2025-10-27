@@ -1,7 +1,25 @@
+# Core web/runtime
 Flask>=2.0
+
+# Real-time (Socket.IO) support - server and recommended async worker
+Flask-SocketIO>=5.3
+python-socketio>=5.8
+eventlet>=0.33
+
+# HTTP + playback
 requests>=2.28
 python-vlc>=3.0
 spotipy>=2.22.0
-# For real NFC hardware, the user can install nfcpy or other drivers (optional)
-# nfcpy>=1.0
+
+# Image/GIF support for LED matrix animations
+Pillow>=9.0
+
+# Metadata for local audio
 mutagen>=1.45
+
+# Optional hardware packages (install on Raspberry Pi when needed)
+# WS281x library for controlling SK6812/WS2812 LED strips (Linux/RPi only)
+rpi_ws281x>=4.3.0; platform_system=="Linux"
+
+# NFC hardware libraries (optional)
+# nfcpy>=1.0

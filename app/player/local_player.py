@@ -46,19 +46,65 @@ class LocalPlayer:
             if os.path.exists(candidate):
                 playlist_id = candidate
         files = []
+        # helper to resolve an m3u entry which may be a plain path or a file:// URL
+        def _resolve_m3u_entry(entry, base_dir):
+            try:
+                import urllib.parse, re
+                e = entry.strip()
+                if not e or e.startswith('#'):
+                    return None
+                # file:// URL handling
+                if e.lower().startswith('file://'):
+                    u = urllib.parse.urlparse(e)
+                    p = urllib.parse.unquote(u.path)
+                    # On Windows VLC/URLs sometimes include a leading slash before drive letter
+                    if os.name == 'nt' and re.match(r'^/[A-Za-z]:', p):
+                        p = p[1:]
+                    # if still not absolute, resolve against base_dir
+                    if not os.path.isabs(p):
+                        p = os.path.join(base_dir, p)
+                    return p if os.path.exists(p) else None
+                # plain path: resolve relative to base_dir
+                if not os.path.isabs(e):
+                    cand = os.path.join(base_dir, e)
+                else:
+                    cand = e
+                return cand if os.path.exists(cand) else None
+            except Exception:
+                return None
         if os.path.isdir(playlist_id):
-            for fn in sorted(os.listdir(playlist_id)):
-                path = os.path.join(playlist_id, fn)
-                if os.path.isfile(path):
-                    files.append(path)
+            # If the directory contains an .m3u playlist file, prefer using that
+            # playlist file instead of adding every file in the directory. This
+            # allows curated playlists to live alongside the audio files.
+            m3us = [fn for fn in sorted(os.listdir(playlist_id)) if fn.lower().endswith('.m3u')]
+            if m3us:
+                # pick the first .m3u file
+                m3u_path = os.path.join(playlist_id, m3us[0])
+                try:
+                    with open(m3u_path, 'r', encoding='utf-8') as f:
+                        base = os.path.dirname(m3u_path)
+                        for line in f:
+                            p = _resolve_m3u_entry(line, base)
+                            if p:
+                                files.append(p)
+                except Exception:
+                    # fall back to adding files in directory if reading fails
+                    for fn in sorted(os.listdir(playlist_id)):
+                        path = os.path.join(playlist_id, fn)
+                        if os.path.isfile(path):
+                            files.append(path)
+            else:
+                for fn in sorted(os.listdir(playlist_id)):
+                    path = os.path.join(playlist_id, fn)
+                    if os.path.isfile(path):
+                        files.append(path)
         elif os.path.isfile(playlist_id) and playlist_id.lower().endswith('.m3u'):
             with open(playlist_id, 'r', encoding='utf-8') as f:
+                base = os.path.dirname(playlist_id)
                 for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    if os.path.isabs(line) and os.path.exists(line):
-                        files.append(line)
+                    p = _resolve_m3u_entry(line, base)
+                    if p:
+                        files.append(p)
         else:
             print('Unknown playlist:', playlist_id)
             return
@@ -226,13 +272,15 @@ class LocalPlayer:
                     except Exception:
                         imgdata = None
                 if imgdata:
-                    # save to static/artwork with a hash name
+                    # save to data/artwork with a hash name (so it's not in package static)
                     import hashlib
                     h = hashlib.sha1(imgdata).hexdigest()
-                    static_dir = os.path.join(os.path.dirname(__file__), '..', 'static', 'artwork')
+                    # data directory is two levels up from this file: app/player -> app -> repo root
+                    data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data'))
+                    art_dir = os.path.join(data_dir, 'artwork')
                     try:
-                        os.makedirs(static_dir, exist_ok=True)
-                        out_path = os.path.join(static_dir, f'{h}.jpg')
+                        os.makedirs(art_dir, exist_ok=True)
+                        out_path = os.path.join(art_dir, f'{h}.jpg')
                         if not os.path.exists(out_path):
                             try:
                                 with open(out_path, 'wb') as out:
@@ -241,11 +289,11 @@ class LocalPlayer:
                                 logging.exception('Failed writing artwork file for %s -> %s', path, out_path)
                                 image_url = None
                             else:
-                                image_url = f'/static/artwork/{h}.jpg'
+                                image_url = f'/artwork/{h}.jpg'
                         else:
-                            image_url = f'/static/artwork/{h}.jpg'
+                            image_url = f'/artwork/{h}.jpg'
                     except Exception:
-                        logging.exception('Failed creating artwork directory %s', static_dir)
+                        logging.exception('Failed creating artwork directory %s', art_dir)
                         image_url = None
                 else:
                     image_url = None

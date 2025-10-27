@@ -1,0 +1,335 @@
+{% extends 'base.html' %}
+{% block content %}
+  <section class="panel">
+    <h2>Display</h2>
+    <p>Live mirror of the 16×16 LED matrix.</p>
+    <div id="led-matrix" style="width: 320px; height:320px; margin:1rem 0; display:grid; grid-template-columns: repeat(16, 1fr); gap:6px; justify-items:center; align-items:center;">
+      {# 256 cells rendered by JS #}
+    </div>
+    <div style="display:flex;gap:1rem;align-items:center;margin-top:.5rem">
+      <label for="display-brightness">Brightness</label>
+      <input id="display-brightness" type="range" min="0" max="100" value="25" style="width:240px">
+      <span id="display-brightness-val" style="min-width:36px;text-align:right">25%</span>
+      <div style="margin-left:1rem;font-size:0.9rem;color:#666">Mode: <strong id="rotary2-mode">skip</strong></div>
+      <div style="margin-left:1rem; display:flex; align-items:center; gap:.4rem; font-size:0.9rem; color:#666">
+        <label for="volume-bar-duration">Volume bar timeout</label>
+        <input id="volume-bar-duration" type="number" step="0.1" min="0" style="width:80px"
+          value="{{ (config.get('display', {}).get('volume_bar_duration_ms', 1500) / 1000) }}">
+        <span style="font-size:0.85rem;color:#999">s</span>
+      </div>
+      <div style="margin-left:.6rem; display:flex; align-items:center; gap:.4rem; font-size:0.9rem; color:#666">
+        <label for="volume-bar-color">Bar color</label>
+        <input id="volume-bar-color" type="color" value="{{ config.get('display', {}).get('volume_bar_color', '#00FF00') }}" style="width:48px;height:28px;padding:0;border:0">
+        <label for="volume-bar-mode" style="margin-left:.4rem">Mode</label>
+        <select id="volume-bar-mode" style="width:110px">
+          <option value="overlay">Overlay</option>
+          <option value="pause">Pause animations</option>
+        </select>
+      </div>
+      <div style="margin-left:.6rem; display:flex; align-items:center; gap:.4rem; font-size:0.9rem; color:#666">
+        <label for="volume-bar-preview-value">Preview vol</label>
+        <input id="volume-bar-preview-value" type="number" min="0" max="100" value="50" style="width:64px">
+        <button id="volume-bar-preview" style="padding:.2rem .5rem">Preview</button>
+      </div>
+    </div>
+    <div style="margin-top:1rem;display:flex;gap:1rem;align-items:center;">
+      <form id="animation-upload-form" style="display:flex;gap:.5rem;align-items:center">
+  <input id="animation-file" type="file" accept=".gif,.json,application/json">
+        <button type="submit">Upload</button>
+      </form>
+      <select id="animation-list" style="min-width:220px"></select>
+      <label for="animation-speed">Speed</label>
+      <input id="animation-speed" type="number" value="1.0" step="0.1" style="width:70px">
+      <label for="animation-loop">Loop</label>
+      <input id="animation-loop" type="checkbox" checked>
+      <button id="animation-play">Play</button>
+      <button id="animation-stop">Stop</button>
+      <button id="animation-delete" title="Delete selected animation">Delete</button>
+    </div>
+    <div style="font-size:0.9rem;color:#666">Pixels update: <span id="update-mode">Initializing...</span>. Hardware-backed when available.</div>
+  </section>
+
+  <style>
+  /* Make each cell look like a glowing LED */
+  .led-cell {
+    width: 100%;
+    height: 100%;
+    /* square pixels (small rounded corners for aesthetics) */
+    border-radius: 4px;
+    /* subtle inset for depth */
+    box-shadow: inset 0 0 4px rgba(0,0,0,0.6);
+    transition: background-color 120ms linear, box-shadow 120ms linear;
+    background: #000;
+  }
+  .led-glow{
+    /* default outer glow (JS will overwrite with colored glow per-pixel) */
+    box-shadow: 0 0 8px rgba(255,255,255,0.12);
+  }
+  </style>
+
+  <script>
+  // Build grid cells immediately
+  const MATRIX_W = 16, MATRIX_H = 16;
+  const matrixEl = document.getElementById('led-matrix');
+  const cells = [];
+  for(let i=0;i<MATRIX_W*MATRIX_H;i++){
+    const d = document.createElement('div');
+    d.className = 'led-cell';
+    d.style.width = '100%'; d.style.height = '100%';
+    matrixEl.appendChild(d);
+    cells.push(d);
+  }
+
+  // Shared pixel application routine
+  function applyPixels(pix){
+    try{
+      for(let i=0;i<cells.length;i++){
+        const color = (pix && pix[i]) ? pix[i] : '#000000';
+        cells[i].style.background = color;
+        const c = color.replace('#','');
+        const rC = parseInt(c.substring(0,2),16);
+        const gC = parseInt(c.substring(2,4),16);
+        const bC = parseInt(c.substring(4,6),16);
+        const lum = (0.2126*rC + 0.7152*gC + 0.0722*bC)/255;
+        if(lum > 0.05){
+          cells[i].classList.add('led-glow');
+          cells[i].style.boxShadow = `0 0 ${6+lum*18}px rgba(${rC},${gC},${bC},0.6)`;
+        } else {
+          cells[i].classList.remove('led-glow');
+          cells[i].style.boxShadow = '0 0 6px rgba(0,0,0,0.6) inset';
+        }
+      }
+    }catch(e){/* ignore */}
+  }
+
+  function setUpdateModeText(text){
+    try{
+      const el = document.getElementById('update-mode');
+      if(el) el.innerText = text;
+    }catch(e){}
+  }
+
+  async function fetchDisplay(){
+    try{
+      const r = await fetch('/api/display');
+      if(!r.ok) return;
+      const j = await r.json();
+      applyPixels(j.pixels||[]);
+    }catch(e){}
+  }
+
+  // Try to load a Socket.IO client recommended by the server, then initialize socket.
+  async function setupSocketIO(){
+    try{
+      const r = await fetch('/api/socketio_client');
+      if(r.ok){
+        const j = await r.json();
+        const src = j.cdn || '/socket.io/socket.io.js';
+        await new Promise((resolve,reject)=>{
+          const s = document.createElement('script');
+          s.src = src;
+          s.async = true;
+          s.onload = ()=>resolve();
+          s.onerror = ()=>reject(new Error('Failed to load socket.io client'));
+          document.head.appendChild(s);
+        });
+      } else {
+        // try fallback path
+        await new Promise((resolve,reject)=>{
+          const s = document.createElement('script');
+          s.src = '/socket.io/socket.io.js';
+          s.async = true;
+          s.onload = ()=>resolve();
+          s.onerror = ()=>reject(new Error('Failed to load fallback socket.io client'));
+          document.head.appendChild(s);
+        });
+      }
+      // If io is available, create socket and wire display_update
+      if(typeof io !== 'undefined'){
+        try{
+          const socket = io();
+          socket.on('connect', ()=>{ setUpdateModeText('Socket.IO (push)'); });
+          socket.on('disconnect', ()=>{ setUpdateModeText('Socket.IO (disconnected)'); });
+          socket.on('display_update', (data)=>{
+            try{ applyPixels(data.pixels || []); }catch(e){}
+          });
+          // Successful socket setup
+          setUpdateModeText('Socket.IO (push)');
+          return true;
+        }catch(e){
+          return false;
+        }
+      }
+      return false;
+    }catch(e){
+      return false;
+    }
+  }
+
+  // Initialize: attempt socket setup; otherwise fall back to polling
+  (async function(){
+    setUpdateModeText('Initializing...');
+    const ok = await setupSocketIO();
+    if(!ok){
+      // polling fallback
+      setUpdateModeText('Polling (500ms)');
+      setInterval(fetchDisplay, 500);
+      fetchDisplay();
+    } else {
+      // also request an initial buffer in case server didn't emit on connect
+      try{ fetchDisplay(); }catch(e){}
+    }
+  })();
+
+  // Animation controls and brightness / rotary mode polling (unchanged)
+  async function loadAnimations(){
+    try{
+      const r = await fetch('/api/animations');
+      if(!r.ok) return;
+      const j = await r.json();
+      const list = document.getElementById('animation-list');
+      list.innerHTML = '';
+      (j.animations||[]).forEach(n=>{
+        const opt = document.createElement('option'); opt.value = n; opt.innerText = n; list.appendChild(opt);
+      });
+    }catch(e){}
+  }
+  document.getElementById('animation-upload-form').addEventListener('submit', async (ev)=>{
+    ev.preventDefault();
+    const f = document.getElementById('animation-file').files[0];
+    if(!f) return alert('Select a file');
+    const fd = new FormData(); fd.append('file', f);
+    try{
+      const r = await fetch('/api/animations/upload', {method:'POST', body: fd});
+      const j = await r.json();
+      if(!r.ok) return alert('Upload failed: '+(j.error||r.status));
+      showToast('Uploaded '+j.filename);
+      await loadAnimations();
+    }catch(e){ alert('Upload failed'); }
+  });
+
+  document.getElementById('animation-play').addEventListener('click', async ()=>{
+    const sel = document.getElementById('animation-list');
+    const name = sel.value; if(!name) return alert('Select an animation');
+    const speed = Number(document.getElementById('animation-speed').value)||1.0;
+    const loop = document.getElementById('animation-loop').checked;
+    try{
+      const r = await fetch('/api/animations/play', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, speed, loop})});
+      const j = await r.json(); if(!r.ok) return alert('Play failed: '+(j.error||r.status));
+      showToast('Playing '+name);
+    }catch(e){ alert('Play failed'); }
+  });
+  document.getElementById('animation-stop').addEventListener('click', async ()=>{
+    try{
+      await fetch('/api/animations/stop', {method:'POST'});
+      showToast('Stopped animation');
+    }catch(e){}
+  });
+
+  // Delete selected animation
+  document.getElementById('animation-delete').addEventListener('click', async ()=>{
+    const sel = document.getElementById('animation-list');
+    const name = sel.value; if(!name) return alert('Select an animation to delete');
+    if(!confirm('Delete animation "'+name+'"? This cannot be undone.')) return;
+    try{
+      const r = await fetch('/api/animations/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name})});
+      const j = await r.json();
+      if(!r.ok) return alert('Delete failed: '+(j.error||r.status));
+      showToast('Deleted '+name);
+      await loadAnimations();
+    }catch(e){ alert('Delete failed'); }
+  });
+  loadAnimations();
+
+  // Brightness handling
+  const briEl = document.getElementById('display-brightness');
+  const briVal = document.getElementById('display-brightness-val');
+  let briTimeout = null;
+  async function loadBrightness(){
+    try{
+      const r = await fetch('/api/display/brightness');
+      if(!r.ok) return;
+      const j = await r.json();
+      const b = typeof j.brightness === 'number'? j.brightness : 0;
+      briEl.value = b;
+      briVal.innerText = b + '%';
+    }catch(e){}
+  }
+  briEl.addEventListener('input', ()=>{
+    if(briTimeout) clearTimeout(briTimeout);
+    briVal.innerText = briEl.value + '%';
+    briTimeout = setTimeout(async ()=>{
+      try{
+        await fetch('/api/display/brightness', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({brightness: Number(briEl.value)})});
+      }catch(e){}
+    }, 150);
+  });
+  loadBrightness();
+
+  // Volume bar duration handling
+  const volDurEl = document.getElementById('volume-bar-duration');
+  const volColorEl = document.getElementById('volume-bar-color');
+  const volModeEl = document.getElementById('volume-bar-mode');
+  let volDurTimeout = null;
+  async function loadVolumeBarDuration(){
+    try{
+      const r = await fetch('/api/display/volume_bar_duration');
+      if(!r.ok) return;
+      const j = await r.json();
+      if(typeof j.volume_bar_duration_s === 'number'){
+        volDurEl.value = j.volume_bar_duration_s;
+        if(typeof j.volume_bar_color === 'string' && volColorEl) volColorEl.value = j.volume_bar_color;
+        if(typeof j.volume_bar_mode === 'string' && volModeEl) volModeEl.value = j.volume_bar_mode;
+      }
+    }catch(e){ }
+  }
+  function saveVolumeSettingsDebounced(){
+    if(volDurTimeout) clearTimeout(volDurTimeout);
+    volDurTimeout = setTimeout(async ()=>{
+      try{
+        const sec = Number(volDurEl.value) || 0;
+        const color = volColorEl ? volColorEl.value : undefined;
+        const mode = volModeEl ? volModeEl.value : undefined;
+        await fetch('/api/display/volume_bar_duration', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({seconds: sec, color: color, mode: mode})});
+        showToast('Saved volume bar settings');
+      }catch(e){ showToast('Failed to save volume bar settings'); }
+    }, 300);
+  }
+  volDurEl.addEventListener('input', saveVolumeSettingsDebounced);
+  if(volColorEl) volColorEl.addEventListener('input', saveVolumeSettingsDebounced);
+  if(volModeEl) volModeEl.addEventListener('change', saveVolumeSettingsDebounced);
+  loadVolumeBarDuration();
+
+  // Preview button handler
+  const volPreviewBtn = document.getElementById('volume-bar-preview');
+  const volPreviewVal = document.getElementById('volume-bar-preview-value');
+  if(volPreviewBtn){
+    volPreviewBtn.addEventListener('click', async ()=>{
+      try{
+        const sec = Number(volDurEl.value) || 0;
+        const color = volColorEl ? volColorEl.value : undefined;
+        const mode = volModeEl ? volModeEl.value : undefined;
+        const vol = volPreviewVal ? Number(volPreviewVal.value)||0 : 50;
+        const payload = { seconds: sec, color: color, mode: mode, volume: vol };
+        const r = await fetch('/api/display/volume_bar_preview', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+        const j = await r.json();
+        if(!r.ok) return showToast('Preview failed: '+(j.error||r.status));
+        showToast('Preview shown');
+      }catch(e){ showToast('Preview failed'); }
+    });
+  }
+
+  // Poll rotary2 mode indicator
+  async function loadRotary2Mode(){
+    try{
+      const r = await fetch('/api/rotary2/mode');
+      if(!r.ok) return;
+      const j = await r.json();
+      document.getElementById('rotary2-mode').innerText = j.mode || 'skip';
+    }catch(e){}
+  }
+  setInterval(loadRotary2Mode, 1000);
+  loadRotary2Mode();
+  </script>
+
+{% endblock %}
