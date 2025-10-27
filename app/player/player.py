@@ -10,6 +10,8 @@ class Player:
         self.local = LocalPlayer()
         self.spotify = SpotifyPlayer(storage)
         self._state = {'playing': False, 'source': None, 'track': None}
+        # optional callback invoked when the active track changes (e.g., next/previous/end)
+        self._track_change_callback = None
 
     def handle_nfc(self, card_id):
         cfg = self.storage.load()
@@ -31,7 +33,7 @@ class Player:
                     self.storage.save(cfg)
             except Exception:
                 pass
-            self._state.update({'playing': True, 'source': 'local', 'track': mapping['id']})
+            self._state.update({'playing': True, 'source': 'local', 'track': mapping['id'], 'mapping_card': card_id})
         elif mapping['type'] == 'spotify':
             print(f'Playing spotify playlist {mapping["id"]}')
             self.spotify.play_playlist(mapping['id'])
@@ -54,7 +56,7 @@ class Player:
                         pass
             except Exception:
                 pass
-            self._state.update({'playing': True, 'source': 'spotify', 'track': mapping['id']})
+            self._state.update({'playing': True, 'source': 'spotify', 'track': mapping['id'], 'mapping_card': card_id})
 
     def status(self):
         return self._state
@@ -157,6 +159,20 @@ class Player:
         elif self._state.get('source') == 'spotify':
             return self.spotify.now_playing()
         return {'source': None}
+
+    def register_track_change_callback(self, cb):
+        """Register a callback invoked when the currently playing track changes.
+        The callback will be called with no arguments.
+        """
+        try:
+            self._track_change_callback = cb
+            if hasattr(self.local, 'set_track_change_callback'):
+                try:
+                    self.local.set_track_change_callback(cb)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def stop(self):
         # Stop playback entirely depending on the active source

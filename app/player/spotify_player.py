@@ -170,7 +170,9 @@ class SpotifyPlayer:
         # album art
         images = item.get('album', {}).get('images') or []
         image_url = images[0]['url'] if images else None
-        return {'source':'spotify','title':title,'artist':artists,'album':album,'position_ms':position,'duration_ms':duration,'playing':playing,'image_url':image_url}
+        # include track id to allow mapping lookups
+        track_id = item.get('id') or item.get('uri')
+        return {'source':'spotify','id': track_id,'title':title,'artist':artists,'album':album,'position_ms':position,'duration_ms':duration,'playing':playing,'image_url':image_url}
 
     def list_devices(self):
         try:

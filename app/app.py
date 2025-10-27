@@ -21,6 +21,174 @@ storage = Storage(os.path.join(data_dir, 'config.json'))
 player = Player(storage)
 nfc = NFCReader(callback=player.handle_nfc)
 
+# Helper: normalize track identifiers (especially local file paths) before hashing.
+import hashlib, urllib.parse, re
+def _canonical_track_id(s):
+    """Return a canonical string for a track id so hashing is stable across
+    places that may represent the same local file differently (file:// URLs,
+    forward/back slashes, case differences on Windows). Non-file ids are
+    returned unchanged.
+    """
+    try:
+        if not s:
+            return s
+        # handle explicit file:// URLs
+        if isinstance(s, str) and s.lower().startswith('file://'):
+            u = urllib.parse.urlparse(s)
+            p = urllib.parse.unquote(u.path)
+            if os.name == 'nt' and re.match(r'^/[A-Za-z]:', p):
+                p = p[1:]
+            p = os.path.abspath(p)
+            return os.path.normcase(os.path.normpath(p))
+
+        # If it looks like a filesystem path or contains path separators, try
+        # to normalize it to an absolute, normalized path. If that fails, fall
+        # back to returning the original id (likely a Spotify id/uri).
+        if isinstance(s, str) and (os.path.isabs(s) or os.path.exists(s) or os.path.sep in s or (os.name == 'nt' and ':' in s)):
+            try:
+                p = s
+                # strip a leading file:/// form if present
+                if p.lower().startswith('file:///'):
+                    p = urllib.parse.unquote(urllib.parse.urlparse(p).path)
+                    if os.name == 'nt' and re.match(r'^/[A-Za-z]:', p):
+                        p = p[1:]
+                p = os.path.abspath(p)
+                return os.path.normcase(os.path.normpath(p))
+            except Exception:
+                return s
+
+        return s
+    except Exception:
+        return s
+
+def _hash_id(s):
+    try:
+        key = _canonical_track_id(s) or ''
+        return hashlib.sha1(key.encode('utf-8')).hexdigest()
+    except Exception:
+        return None
+
+# Special marker that, when used as the 'animation' value for a track,
+# instructs the server to stop any running animation and clear the matrix
+# to all black for that track.
+STOP_ANIMATION_MARKER = '__STOP__'
+
+# Thread-safety and duplicate-suppression for animation playback
+import threading, time
+_animation_lock = threading.Lock()
+# record last played animation name and timestamp to suppress rapid duplicates
+_last_animation = {'name': None, 'started_at': 0.0}
+# how many seconds to ignore repeated plays of the same animation
+_DUPLICATE_SUPPRESSION_SEC = float(os.environ.get('ANIMATION_DUP_SUPPRESS_SEC', '0.5'))
+
+def _play_animation_safe(fname, loop=False, speed=1.0):
+    """Start or stop an animation in a thread-safe way.
+
+    - If fname is STOP_ANIMATION_MARKER, stop and clear the matrix.
+    - If the same filename was started less than _DUPLICATE_SUPPRESSION_SEC ago,
+      the call is ignored to avoid thrash from concurrent triggers.
+    """
+    if matrix is None:
+        return
+    try:
+        now = time.time()
+        with _animation_lock:
+            # Suppress repeated starts of the same animation in quick succession
+            last = _last_animation.get('name')
+            last_t = _last_animation.get('started_at', 0.0)
+            if fname and last == fname and (now - last_t) < _DUPLICATE_SUPPRESSION_SEC:
+                return
+
+            # If STOP marker, just stop and clear
+            if fname == STOP_ANIMATION_MARKER:
+                try:
+                    matrix.stop_animation()
+                except Exception:
+                    pass
+                try:
+                    matrix.set_pixels(['#000000'] * (matrix.width * matrix.height), bypass_overlay=True)
+                except Exception:
+                    pass
+                _last_animation['name'] = fname
+                _last_animation['started_at'] = now
+                return
+
+            # path resolution
+            path = os.path.join(animations_dir or '', fname)
+            if not fname or not os.path.exists(path):
+                return
+
+            # stop any previous animation before starting the new one
+            try:
+                matrix.stop_animation()
+            except Exception:
+                pass
+
+            if fname.lower().endswith('.gif'):
+                # respect provided speed and loop
+                try:
+                    matrix.play_animation_from_gif(path, speed=speed, loop=loop)
+                except Exception:
+                    pass
+            elif fname.lower().endswith('.json') and hasattr(matrix, 'play_wled_json'):
+                try:
+                    matrix.play_wled_json(path)
+                except Exception:
+                    pass
+
+            _last_animation['name'] = fname
+            _last_animation['started_at'] = now
+    except Exception:
+        pass
+
+
+def _trigger_animation_for_current_track(async_run: bool = True):
+    """Attempt to trigger the mapping animation for the currently playing track.
+    If async_run is True, this will spawn a background thread and return immediately.
+    """
+    def _do():
+        try:
+            now = player.now_playing() or {}
+            track_id = now.get('id')
+            mapping_card = player._state.get('mapping_card')
+            if not (mapping_card and track_id and matrix is not None):
+                return
+            cfg = storage.load()
+            mapping = cfg.get('mappings', {}).get(mapping_card, {})
+            stored = mapping.get('animations', {}) or {}
+            h = _hash_id(track_id)
+            assoc = stored.get(h)
+            if not assoc:
+                return
+            fname = assoc.get('animation')
+            loop = bool(assoc.get('loop', False))
+            # centralize thread-safe play/stop logic and suppress rapid duplicates
+            try:
+                _play_animation_safe(fname, loop=loop, speed=1.0)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    if async_run:
+        try:
+            import threading
+            threading.Thread(target=_do, daemon=True).start()
+        except Exception:
+            # fallback to sync
+            _do()
+    else:
+        _do()
+
+
+# Register a track-change callback on the player so playback events (local)
+# can immediately trigger per-track animations without waiting for the poller.
+try:
+    # prefer async trigger so the callback returns quickly
+    player.register_track_change_callback(lambda: _trigger_animation_for_current_track(async_run=True))
+except Exception:
+    pass
+
 # Serve cached artwork saved under the data directory. Artwork is stored in
 # <repo root>/data/artwork and served at /artwork/<filename> so it can be
 # managed separately from package static files.
@@ -324,7 +492,13 @@ def mappings():
                 volume = v
             except Exception:
                 volume = None
-        mappings[card] = {'type': map_type, 'id': playlist_id, 'shuffle': shuffle, 'repeat': repeat_mode, 'volume': volume}
+        # preserve existing per-track animations when editing an existing mapping
+        prev = mappings.get(card, {})
+        preserved = prev.get('animations') if isinstance(prev, dict) else None
+        new_map = {'type': map_type, 'id': playlist_id, 'shuffle': shuffle, 'repeat': repeat_mode, 'volume': volume}
+        if preserved:
+            new_map['animations'] = preserved
+        mappings[card] = new_map
         cfg['mappings'] = mappings
         storage.save(cfg)
         # If request was AJAX, return JSON to avoid relying on redirects
@@ -366,6 +540,35 @@ def simulate():
             return jsonify({'error': 'card_id required'}), 400
         # simulate calling NFC callback
         player.handle_nfc(card)
+        # Try to immediately trigger any per-track animation for this mapping so
+        # web UI-initiated mappings start their animations without waiting for
+        # the background poller interval.
+        try:
+            def _try_trigger():
+                try:
+                    now = player.now_playing() or {}
+                    track_id = now.get('id')
+                    mapping_card = player._state.get('mapping_card')
+                    if mapping_card and track_id and matrix is not None:
+                        h = _hash_id(track_id)
+                        cfg = storage.load()
+                        mapping = cfg.get('mappings', {}).get(mapping_card, {})
+                        stored = mapping.get('animations', {}) or {}
+                        assoc = stored.get(h)
+                        if assoc:
+                            fname = assoc.get('animation')
+                            loop = bool(assoc.get('loop', False))
+                            try:
+                                _play_animation_safe(fname, loop=loop, speed=1.0)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            # run in background so simulate returns quickly
+            import threading
+            threading.Thread(target=_try_trigger, daemon=True).start()
+        except Exception:
+            pass
         return jsonify({'ok': True})
     # GET -> render simulate page
     return render_template('simulate.html')
@@ -511,24 +714,37 @@ def api_animations_play():
             return jsonify({'error': 'matrix not available'}), 500
         # Support GIF animations and WLED JSON presets
         if name.lower().endswith('.gif'):
-            matrix.play_animation_from_gif(path, speed=speed, loop=loop)
+            try:
+                _play_animation_safe(name, loop=loop, speed=speed)
+            except Exception:
+                pass
         elif name.lower().endswith('.json'):
             # try to parse and apply WLED JSON preset
             try:
                 # prefer method name if available
                 if hasattr(matrix, 'play_wled_json'):
-                    matrix.play_wled_json(path)
+                    try:
+                        _play_animation_safe(name, loop=loop, speed=speed)
+                    except Exception:
+                        pass
                 else:
                     # fallback: use helper parser from module if present
                     try:
                         from .hardware.ledmatrix import parse_wled_json_from_file
                         pix, bri = parse_wled_json_from_file(path, matrix.width * matrix.height)
-                        matrix.set_pixels(pix)
-                        if bri is not None:
-                            try:
-                                matrix.set_brightness(int(bri))
-                            except Exception:
-                                pass
+                        # set pixels under lock to avoid concurrent changes
+                        try:
+                            with _animation_lock:
+                                matrix.set_pixels(pix)
+                                if bri is not None:
+                                    try:
+                                        matrix.set_brightness(int(bri))
+                                    except Exception:
+                                        pass
+                                _last_animation['name'] = name
+                                _last_animation['started_at'] = time.time()
+                        except Exception:
+                            pass
                     except Exception as e:
                         return jsonify({'error': 'failed to parse wled json', 'details': str(e)}), 500
             except Exception as e:
@@ -545,7 +761,22 @@ def api_animations_stop():
     try:
         if matrix is None:
             return jsonify({'ok': True})
-        matrix.stop_animation()
+        data = request.json or {}
+        # optional clear flag to also blank the matrix after stopping
+        if data.get('clear'):
+            try:
+                _play_animation_safe(STOP_ANIMATION_MARKER)
+            except Exception:
+                pass
+        else:
+            try:
+                with _animation_lock:
+                    matrix.stop_animation()
+                    # clear last animation record so subsequent plays aren't suppressed
+                    _last_animation['name'] = None
+                    _last_animation['started_at'] = time.time()
+            except Exception:
+                pass
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -777,6 +1008,99 @@ def api_mappings():
     return jsonify({'mappings': result})
 
 
+@app.route('/api/mappings/<card_id>/tracks')
+def api_mapping_tracks(card_id):
+    """Return list of tracks for a mapping (only available for local mappings or when Spotify is configured)."""
+    cfg = storage.load()
+    mappings = cfg.get('mappings', {})
+    mapping = mappings.get(card_id)
+    if not mapping:
+        return jsonify({'error': 'mapping not found'}), 404
+    try:
+        if mapping.get('type') == 'local':
+            items = player.local.get_playlist_items(mapping.get('id') or '')
+            return jsonify({'tracks': items})
+        else:
+            # try to fetch spotify playlist tracks if available
+            try:
+                sp_items = []
+                pl_id = mapping.get('id')
+                # spotipy returns paging objects; use playlist_items helper
+                resp = player.spotify._call_spotify('playlist_items', pl_id)
+                if resp and isinstance(resp, dict):
+                    for it in resp.get('items', []):
+                        tr = it.get('track') or {}
+                        tid = tr.get('id') or tr.get('uri') or tr.get('name')
+                        title = tr.get('name') or tid
+                        artists = ', '.join([a.get('name') for a in tr.get('artists', [])]) if tr.get('artists') else ''
+                        display = title + (f' — {artists}' if artists else '')
+                        sp_items.append({'id': tid, 'title': display})
+                return jsonify({'tracks': sp_items})
+            except Exception:
+                return jsonify({'tracks': []})
+    except Exception:
+        return jsonify({'tracks': []})
+
+
+@app.route('/api/mappings/<card_id>/animations', methods=['GET','POST'])
+def api_mapping_animations(card_id):
+    """GET -> return existing associations for mapping. POST -> set associations in batch.
+    POST payload: { associations: { <track_id>: { animation: <filename|null>, loop: bool } } }
+    """
+    # use module _hash_id helper for stable canonicalization + hashing
+
+    cfg = storage.load()
+    mappings = cfg.get('mappings', {})
+    mapping = mappings.get(card_id)
+    if not mapping:
+        return jsonify({'error': 'mapping not found'}), 404
+    if request.method == 'GET':
+        # mapping['animations'] is stored keyed by hashed track ids. We need to
+        # present associations keyed by the original track ids returned by
+        # /api/mappings/<card_id>/tracks for the editor.
+        stored = mapping.get('animations', {}) or {}
+        # fetch current tracks to map hashes back to ids
+        tracks_resp = api_mapping_tracks(card_id)
+        try:
+            tracks = tracks_resp.get_json().get('tracks', [])
+        except Exception:
+            tracks = []
+        out = {}
+        for t in tracks:
+            tid = t.get('id')
+            if not tid:
+                continue
+            h = _hash_id(tid)
+            if h and h in stored:
+                out[tid] = stored.get(h)
+        return jsonify({'animations': out})
+    # POST -> update associations
+    data = request.json or {}
+    assocs = data.get('associations')
+    if not isinstance(assocs, dict):
+        return jsonify({'error': 'associations required'}), 400
+    try:
+        # ensure animations dict exists (stored keyed by hash)
+        mapping.setdefault('animations', {})
+        stored = mapping['animations']
+        for tid, v in assocs.items():
+            h = _hash_id(tid)
+            if not h:
+                continue
+            if v is None or v.get('animation') is None:
+                # remove association if present
+                if h in stored:
+                    del stored[h]
+            else:
+                stored[h] = {'animation': v.get('animation'), 'loop': bool(v.get('loop', False))}
+        mappings[card_id] = mapping
+        cfg['mappings'] = mappings
+        storage.save(cfg)
+        return jsonify({'ok': True, 'animations': mapping.get('animations', {})})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/options', methods=['GET','POST'])
 def api_options():
     # GET -> return current effective options (shuffle/repeat)
@@ -819,25 +1143,102 @@ def api_apply_options():
 
 @app.route('/api/nowplaying')
 def api_now_playing():
-    return jsonify(player.now_playing())
+    try:
+        now = player.now_playing() or {}
+        # Normalize fields so the UI can rely on stable keys and types.
+        src = now.get('source') or None
+        tid = now.get('id') or None
+        title = now.get('title') or None
+        artist = now.get('artist') or None
+        album = now.get('album') or None
+        # coerce numeric timing values to ints when possible
+        try:
+            pos = int(now.get('position_ms') or 0)
+        except Exception:
+            try:
+                pos = int(float(now.get('position') or 0))
+            except Exception:
+                pos = 0
+        try:
+            dur = int(now.get('duration_ms') or 0)
+        except Exception:
+            try:
+                dur = int(float(now.get('duration') or 0))
+            except Exception:
+                dur = 0
+        playing = bool(now.get('playing'))
+        # image_url may be a remote URL or a local /artwork/<name> path; ensure '' -> None
+        img = now.get('image_url') if 'image_url' in now else now.get('image')
+        if img is None or img == '' or img == -1:
+            img = None
+
+        # compute progress percent if duration available
+        progress_pct = None
+        try:
+            if dur and dur > 0:
+                progress_pct = int((pos / dur) * 100)
+        except Exception:
+            progress_pct = None
+
+        resp = {
+            'source': src,
+            'id': tid,
+            'title': title,
+            'artist': artist,
+            'album': album,
+            'position_ms': pos,
+            'duration_ms': dur,
+            'playing': playing,
+            'image_url': img,
+            'progress_pct': progress_pct,
+        }
+        return jsonify(resp)
+    except Exception:
+        return jsonify({'source': None, 'position_ms': 0, 'duration_ms': 0, 'playing': False, 'image_url': None})
 
 
 @app.route('/api/control', methods=['POST'])
 def api_control():
     action = request.json.get('action')
     if action == 'play':
-        player.play(); return jsonify({'ok': True})
+        player.play()
+        # Try to trigger animation for current track immediately
+        try:
+            _trigger_animation_for_current_track()
+        except Exception:
+            pass
+        return jsonify({'ok': True})
     if action == 'pause':
         player.pause(); return jsonify({'ok': True})
     if action == 'next':
-        player.next(); return jsonify({'ok': True})
+        player.next()
+        try:
+            _trigger_animation_for_current_track()
+        except Exception:
+            pass
+        return jsonify({'ok': True})
     if action == 'previous':
-        player.previous(); return jsonify({'ok': True})
+        player.previous()
+        try:
+            _trigger_animation_for_current_track()
+        except Exception:
+            pass
+        return jsonify({'ok': True})
     if action == 'seek':
         pos = int(request.json.get('position_ms', 0))
         player.seek(pos); return jsonify({'ok': True})
     if action == 'stop':
-        player.stop(); return jsonify({'ok': True})
+        player.stop()
+        # stop any running animation and clear display (thread-safe)
+        try:
+            if matrix is not None:
+                try:
+                    _play_animation_safe(STOP_ANIMATION_MARKER)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return jsonify({'ok': True})
     if action == 'volume':
         # expected payload: { volume: 0-100 }
         vol = request.json.get('volume')
@@ -913,3 +1314,50 @@ if __name__ == '__main__':
         socketio.run(app, host='0.0.0.0', port=5000)
     else:
         app.run(host='0.0.0.0', port=5000)
+
+# Background poller to monitor playback changes (Spotify/local) and trigger per-track animations
+def _start_playback_poller(interval_s=2.0):
+    import threading, time, hashlib
+
+
+    def _poller():
+        last_track = None
+        while True:
+            try:
+                now = player.now_playing() or {}
+                track_id = now.get('id')
+                mapping_card = player._state.get('mapping_card')
+                if mapping_card and track_id and matrix is not None:
+                    try:
+                        cfg = storage.load()
+                        mapping = cfg.get('mappings', {}).get(mapping_card, {})
+                        stored = mapping.get('animations', {}) or {}
+                        h = _hash_id(track_id)
+                        assoc = stored.get(h)
+                        if assoc and track_id != last_track:
+                            fname = assoc.get('animation')
+                            loop = bool(assoc.get('loop', False))
+                            try:
+                                _play_animation_safe(fname, loop=loop, speed=1.0)
+                            except Exception:
+                                pass
+                            last_track = track_id
+                        elif not assoc:
+                            last_track = None
+                    except Exception:
+                        pass
+                time.sleep(interval_s)
+            except Exception:
+                try:
+                    time.sleep(interval_s)
+                except Exception:
+                    pass
+
+    t = threading.Thread(target=_poller, daemon=True)
+    t.start()
+
+# start poller on module import so server-side animations trigger automatically
+try:
+    _start_playback_poller()
+except Exception:
+    pass

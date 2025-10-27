@@ -176,7 +176,7 @@ class LEDMatrix:
                 ev.set()
             th = getattr(self, '_anim_thread', None)
             if th is not None and th.is_alive():
-                th.join(timeout=1.0)
+                th.join(timeout=5.0)
         finally:
             self._anim_thread = None
             self._anim_stop_event = None

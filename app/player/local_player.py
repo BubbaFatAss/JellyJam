@@ -19,6 +19,19 @@ class LocalPlayer:
         self._total_items = 0
         self._monitor_lock = threading.Lock()
         self._user_stopped = False
+        # optional callback for track change notifications
+        self._track_change_callback = None
+
+    def set_track_change_callback(self, cb):
+        """Register a callback to be invoked when the currently playing track changes.
+
+        The callback will be called with no arguments. Exceptions raised by the
+        callback are swallowed to avoid impacting playback.
+        """
+        try:
+            self._track_change_callback = cb
+        except Exception:
+            pass
 
     def _clear(self):
         self.media_list = self.instance.media_list_new()
@@ -190,6 +203,31 @@ class LocalPlayer:
                     logging.exception('Error in end-of-track handler')
 
             em.event_attach(vlc.EventType.MediaPlayerEndReached, _on_end)
+            # Attach media-changed/playing events to notify when a new track starts
+            try:
+                def _on_media_changed(ev):
+                    try:
+                        if getattr(self, '_track_change_callback', None):
+                            try:
+                                self._track_change_callback()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                # prefer MediaPlayerMediaChanged if available
+                if hasattr(vlc.EventType, 'MediaPlayerMediaChanged'):
+                    try:
+                        em.event_attach(vlc.EventType.MediaPlayerMediaChanged, _on_media_changed)
+                    except Exception:
+                        pass
+                # also attach MediaPlayerPlaying as a fallback
+                if hasattr(vlc.EventType, 'MediaPlayerPlaying'):
+                    try:
+                        em.event_attach(vlc.EventType.MediaPlayerPlaying, _on_media_changed)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         except Exception:
             logging.exception('Failed to attach end event')
 
@@ -300,9 +338,15 @@ class LocalPlayer:
             except Exception:
                 logging.exception('Error extracting artwork for %s', path if 'path' in locals() else '<unknown>')
                 image_url = None
-            return {'source':'local','title':title,'artist':artist,'album':album,'position_ms':position,'duration_ms':duration,'playing':playing,'image_url':image_url}
+                # include a stable id for the current track (absolute path) to allow mapping lookups
+                # (note: title/artist/album kept for compatibility)
+            try:
+                cur_id = path
+            except Exception:
+                cur_id = None
+            return {'source':'local','id': cur_id,'title':title,'artist':artist,'album':album,'position_ms':position,'duration_ms':duration,'playing':playing,'image_url':image_url}
         except Exception:
-            return {'source':'local','title':None,'artist':None,'album':None,'position_ms':0,'duration_ms':0,'playing':False,'image_url':None}
+            return {'source':'local','id': None,'title':None,'artist':None,'album':None,'position_ms':0,'duration_ms':0,'playing':False,'image_url':None}
 
     def seek(self, position_ms):
         try:
@@ -374,6 +418,74 @@ class LocalPlayer:
             if os.path.isdir(path) or (os.path.isfile(path) and entry.lower().endswith('.m3u')):
                 results.append(path)
         return results
+
+    def get_playlist_items(self, playlist_id):
+        """Return an ordered list of tracks for the given playlist_id.
+        For local playlists this returns a list of dicts: {'id': <abs path>, 'title': <basename>}.
+        Supports directories and .m3u files and resolves file:// entries.
+        """
+        import os, re, urllib.parse
+        def _resolve(entry, base_dir):
+            try:
+                e = entry.strip()
+                if not e or e.startswith('#'):
+                    return None
+                if e.lower().startswith('file://'):
+                    u = urllib.parse.urlparse(e)
+                    p = urllib.parse.unquote(u.path)
+                    if os.name == 'nt' and re.match(r'^/[A-Za-z]:', p):
+                        p = p[1:]
+                    if not os.path.isabs(p):
+                        p = os.path.join(base_dir, p)
+                    return p if os.path.exists(p) else None
+                if not os.path.isabs(e):
+                    cand = os.path.join(base_dir, e)
+                else:
+                    cand = e
+                return cand if os.path.exists(cand) else None
+            except Exception:
+                return None
+
+        # resolve relative playlist_id against base
+        if not os.path.isabs(playlist_id):
+            candidate = os.path.join(self.base, playlist_id)
+            if os.path.exists(candidate):
+                playlist_id = candidate
+
+        items = []
+        if os.path.isdir(playlist_id):
+            # prefer an .m3u file if present
+            m3us = [fn for fn in sorted(os.listdir(playlist_id)) if fn.lower().endswith('.m3u')]
+            if m3us:
+                m3u_path = os.path.join(playlist_id, m3us[0])
+                try:
+                    with open(m3u_path, 'r', encoding='utf-8') as f:
+                        base = os.path.dirname(m3u_path)
+                        for line in f:
+                            p = _resolve(line, base)
+                            if p:
+                                items.append({'id': os.path.abspath(p), 'title': os.path.basename(p)})
+                except Exception:
+                    for fn in sorted(os.listdir(playlist_id)):
+                        path = os.path.join(playlist_id, fn)
+                        if os.path.isfile(path):
+                            items.append({'id': os.path.abspath(path), 'title': os.path.basename(path)})
+            else:
+                for fn in sorted(os.listdir(playlist_id)):
+                    path = os.path.join(playlist_id, fn)
+                    if os.path.isfile(path):
+                        items.append({'id': os.path.abspath(path), 'title': os.path.basename(path)})
+        elif os.path.isfile(playlist_id) and playlist_id.lower().endswith('.m3u'):
+            try:
+                with open(playlist_id, 'r', encoding='utf-8') as f:
+                    base = os.path.dirname(playlist_id)
+                    for line in f:
+                        p = _resolve(line, base)
+                        if p:
+                            items.append({'id': os.path.abspath(p), 'title': os.path.basename(p)})
+            except Exception:
+                pass
+        return items
 
     # Local options are stored in-memory and applied where possible
     def set_shuffle(self, enabled: bool):

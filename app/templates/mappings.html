@@ -108,11 +108,13 @@
           spanOpts.innerText = `[Shuffle: ${m.shuffle? 'yes':'no'}, Repeat: ${m.repeat && m.repeat !== 'off' ? 'yes':'no'}${m.volume!=null ? ', Volume: '+m.volume : ''}]`;
           const editBtn = document.createElement('button'); editBtn.className='edit-mapping small'; editBtn.innerText='Edit';
           editBtn.addEventListener('click', ()=>{ openInlineEditor(li, m); });
+          const animBtn = document.createElement('button'); animBtn.className='edit-animations small'; animBtn.style.marginLeft='0.5rem'; animBtn.innerText='Animations';
+          animBtn.addEventListener('click', ()=>{ openAnimationsEditor(li, m); });
           const delForm = document.createElement('form'); delForm.method='post'; delForm.action='{{ url_for("mappings_delete") }}'; delForm.style.display='inline'; delForm.style.marginLeft='1rem';
           const hid = document.createElement('input'); hid.type='hidden'; hid.name='card_id'; hid.value = m.card_id; delForm.appendChild(hid);
           const delBtn = document.createElement('button'); delBtn.type='submit'; delBtn.className='small'; delBtn.innerText='Delete'; delForm.appendChild(delBtn);
           delForm.addEventListener('submit', (ev)=>{ if(!confirm('Delete this mapping?')) ev.preventDefault(); });
-          li.appendChild(strong); li.appendChild(document.createTextNode(' → ')); li.appendChild(spanType); li.appendChild(document.createTextNode(' : ')); li.appendChild(spanId); li.appendChild(spanOpts); li.appendChild(editBtn); li.appendChild(delForm);
+          li.appendChild(strong); li.appendChild(document.createTextNode(' → ')); li.appendChild(spanType); li.appendChild(document.createTextNode(' : ')); li.appendChild(spanId); li.appendChild(spanOpts); li.appendChild(editBtn); li.appendChild(animBtn); li.appendChild(delForm);
           ul.appendChild(li);
         }
       }catch(err){ console.error('Failed to refresh mappings',err); }
@@ -241,6 +243,100 @@
           const res = await fetch('{{ url_for("mappings") }}', { method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, body: fd });
           if(res.ok){ showToast('Mapping saved',2000); form.remove(); await refreshMappingsList(); } else { const txt = await res.text(); errEl.innerText='Save failed: '+res.status; errEl.style.display='inline-block'; }
         }catch(err){ console.error(err); errEl.innerText='Network error'; errEl.style.display='inline-block'; }
+      });
+    }
+
+    // Animations editor: associate an animation file with individual tracks in the mapping
+    async function openAnimationsEditor(li, mapping){
+      // fetch tracks, animations and existing associations
+      const card = mapping.card_id;
+      const tracksResp = await fetch(`/api/mappings/${encodeURIComponent(card)}/tracks`);
+      const tracksJson = await tracksResp.json();
+      const tracks = tracksJson.tracks || [];
+      const animResp = await fetch('/api/animations');
+      const animJson = await animResp.json();
+      const anims = animJson.animations || [];
+      const assocResp = await fetch(`/api/mappings/${encodeURIComponent(card)}/animations`);
+      const assocJson = await assocResp.json();
+      const existing = assocJson.animations || {};
+
+      // build editor UI
+      const panel = document.createElement('div'); panel.className='panel';
+      const title = document.createElement('h4'); title.innerText = `Animations for ${card}`;
+      panel.appendChild(title);
+      const table = document.createElement('table'); table.style.width='100%';
+      const thead = document.createElement('thead'); thead.innerHTML = '<tr><th>Track</th><th>Animation</th><th>Loop</th></tr>'; table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+        for(const t of tracks){
+        const tr = document.createElement('tr');
+        const tdTrack = document.createElement('td'); tdTrack.innerText = t.title || t.id;
+        const tdAnim = document.createElement('td');
+        const sel = document.createElement('select'); sel.style.width='100%';
+  const noneOpt = document.createElement('option'); noneOpt.value=''; noneOpt.text = '(none)'; sel.add(noneOpt);
+  // special option to stop/clear the display
+  const stopOpt = document.createElement('option'); stopOpt.value='__STOP__'; stopOpt.text = '(Stop / Clear display)'; sel.add(stopOpt);
+  for(const a of anims){ const o = document.createElement('option'); o.value=a; o.text=a; sel.add(o); }
+        // preselect existing
+        const cur = existing[t.id];
+        if(cur && cur.animation){ sel.value = cur.animation; }
+        tdAnim.appendChild(sel);
+        const tdLoop = document.createElement('td');
+        const chk = document.createElement('input'); chk.type='checkbox'; chk.checked = cur && cur.loop;
+        tdLoop.appendChild(chk);
+        // preview button
+        const tdPreview = document.createElement('td');
+        const previewBtn = document.createElement('button'); previewBtn.type='button'; previewBtn.className='small'; previewBtn.innerText='Preview';
+        previewBtn.addEventListener('click', async ()=>{
+          const animName = sel.value;
+          const loopNow = !!chk.checked;
+          if(!animName){ alert('No animation selected for preview'); return; }
+          try{
+            if(animName === '__STOP__'){
+              // request server to stop animation and clear display
+              const r = await fetch('/api/animations/stop', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({clear: true}) });
+              if(r.ok){ try{ showToast('Display cleared', 1500); }catch(e){} } else { alert('Failed to clear display'); }
+              return;
+            }
+            const r = await fetch('/api/animations/play', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name: animName, loop: loopNow, speed: 1.0}) });
+            if(r.ok){ try{ showToast('Preview started', 1500); }catch(e){} } else { const txt = await r.text(); alert('Preview failed: '+r.status); }
+          }catch(err){ console.error(err); alert('Network error starting preview'); }
+        });
+        tdPreview.appendChild(previewBtn);
+        tr.appendChild(tdTrack); tr.appendChild(tdAnim); tr.appendChild(tdLoop); tr.appendChild(tdPreview);
+        // store track id on row for save
+        tr.dataset.trackId = t.id;
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      panel.appendChild(table);
+      const btnBar = document.createElement('div'); btnBar.style.marginTop='0.5rem';
+      const saveBtn = document.createElement('button'); saveBtn.innerText='Save';
+      const cancelBtn = document.createElement('button'); cancelBtn.innerText='Cancel'; cancelBtn.style.marginLeft='0.5rem';
+      btnBar.appendChild(saveBtn); btnBar.appendChild(cancelBtn); panel.appendChild(btnBar);
+      // insert after li
+      li.style.display='none'; li.parentNode.insertBefore(panel, li.nextSibling);
+
+      cancelBtn.addEventListener('click', ()=>{ panel.remove(); li.style.display='block'; });
+
+      saveBtn.addEventListener('click', async ()=>{
+        // collect associations
+        const associations = {};
+        for(const row of tbody.querySelectorAll('tr')){
+          const tid = row.dataset.trackId;
+          const sel = row.querySelector('select');
+          const chk = row.querySelector('input[type=checkbox]');
+          const anim = sel.value || null;
+          if(anim === null){
+            // remove mapping if present
+            associations[tid] = null;
+          } else {
+            associations[tid] = { animation: anim, loop: !!chk.checked };
+          }
+        }
+        try{
+          const r = await fetch(`/api/mappings/${encodeURIComponent(card)}/animations`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({associations}) });
+          if(r.ok){ showToast('Animations saved',2000); panel.remove(); await refreshMappingsList(); } else { alert('Save failed'); }
+        }catch(err){ console.error(err); alert('Network error'); }
       });
     }
 
