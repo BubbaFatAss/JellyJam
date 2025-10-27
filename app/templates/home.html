@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block content %}
   <section class="panel">
-    <h2>Now Playing</h2>
+  <h2>Now Playing <span id="update-indicator" class="status-init">Initializing...</span></h2>
     <div id="np">
       <div style="display:flex;gap:1rem;align-items:center">
         <img id="album-art" src="" alt="album art" style="width:120px;height:120px;object-fit:cover;border-radius:8px">
@@ -47,6 +47,7 @@
   <script>
   // Now Playing logic (moved from now_playing.html)
   let polling = null;
+  function setUpdateIndicator(text){ try{ const el = document.getElementById('update-indicator'); if(!el) return; el.innerText = text; el.classList.remove('status-push','status-poll','status-init','status-disconnected'); if(text && text.toLowerCase().includes('push')) el.classList.add('status-push'); else if(text && text.toLowerCase().includes('poll')) el.classList.add('status-poll'); else if(text && text.toLowerCase().includes('disconnect')) el.classList.add('status-disconnected'); else el.classList.add('status-init'); }catch(e){} }
   async function fetchNow(){
     const r = await fetch('/api/nowplaying');
     const j = await r.json();
@@ -91,8 +92,46 @@
     await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'seek',position_ms:pos})});
     setTimeout(fetchNow,200);
   });
-  polling = setInterval(fetchNow, 1000);
-  fetchNow();
+  // Try to use Socket.IO for live now-playing updates; fall back to polling.
+  async function setupNowPlayingSocket(){
+    try{
+      const r = await fetch('/api/socketio_client');
+      if(r.ok){
+        const j = await r.json();
+        const src = j.cdn || '/socket.io/socket.io.js';
+        await new Promise((resolve,reject)=>{
+          const s = document.createElement('script'); s.src = src; s.async = true;
+          s.onload = ()=>resolve(); s.onerror = ()=>reject(new Error('Failed to load socket.io'));
+          document.head.appendChild(s);
+        });
+      } else {
+        // fallback
+        await new Promise((resolve,reject)=>{
+          const s = document.createElement('script'); s.src = '/socket.io/socket.io.js'; s.async = true;
+          s.onload = ()=>resolve(); s.onerror = ()=>reject(new Error('Failed to load fallback socket.io'));
+          document.head.appendChild(s);
+        });
+      }
+      if(typeof io === 'undefined') return false;
+      const socket = io();
+      socket.on('connect', ()=>{
+        try{ if(polling){ clearInterval(polling); polling = null; } setUpdateIndicator('Push (Socket.IO)'); }catch(e){}
+        // request immediate refresh (server will also emit on connect)
+        fetchNow();
+      });
+      socket.on('disconnect', ()=>{ try{ setUpdateIndicator('Socket disconnected'); }catch(e){} });
+      socket.on('nowplaying', (data)=>{ try{ const j = data||{}; function valOrDash(v){ return (v === null || v === undefined || v === '' || v === -1)? '-' : v; } document.getElementById('title').innerText = valOrDash(j.title); document.getElementById('artist').innerText = valOrDash(j.artist); document.getElementById('album').innerText = valOrDash(j.album); const posRaw = j.position_ms; const durRaw = j.duration_ms; if (typeof posRaw === 'number' && typeof durRaw === 'number' && durRaw > 0 && posRaw >= 0){ document.getElementById('pos').innerText = msToTime(posRaw); document.getElementById('dur').innerText = msToTime(durRaw); const pct = Math.floor((posRaw/durRaw)*100); document.getElementById('seek').value = pct; document.getElementById('seek').disabled = false; } else { document.getElementById('pos').innerText = '-'; document.getElementById('dur').innerText = '-'; document.getElementById('seek').value = 0; document.getElementById('seek').disabled = true; } const img = (j.image_url === null || j.image_url === undefined || j.image_url === -1)? '' : j.image_url || ''; document.getElementById('album-art').src = img || '/static/placeholder_artwork.svg'; document.getElementById('playpause').innerText = j.playing? '⏸':'⏯'; }catch(e){}
+      });
+      setUpdateIndicator('Push (Socket.IO)');
+      return true;
+    }catch(e){ return false; }
+  }
+
+  (async function(){
+    setUpdateIndicator('Initializing...');
+    const ok = await setupNowPlayingSocket();
+    if(!ok){ setUpdateIndicator('Polling (1s)'); polling = setInterval(fetchNow, 1000); fetchNow(); }
+  })();
   async function loadQuickMappings(){
     const r = await fetch('/api/mappings');
     const j = await r.json();

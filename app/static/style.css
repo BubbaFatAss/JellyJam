@@ -26,3 +26,18 @@ button{background:var(--accent);color:white;border:none;padding:.5rem 0.9rem;bor
 .jj-toast-item.visible{opacity:1;transform:translateY(0)}
 footer{max-width:1000px;margin:2rem auto;color:#6b7280;font-size:.9rem}
 
+/* Small status badge used for push/poll indicators */
+#update-indicator, #update-mode {
+	display: inline-block;
+	padding: 3px 8px;
+	border-radius: 999px;
+	font-size: 0.8rem;
+	color: #063244;
+	background: #eee;
+	margin-left: 0.5rem;
+}
+.status-push { background: linear-gradient(90deg,#86efac,#34d399); color: #043018; }
+.status-poll { background: linear-gradient(90deg,#ffd8a8,#fb923c); color: #5a2d00; }
+.status-init { background: #e6eef7; color: #0b3551; }
+.status-disconnected { background: #f3f4f6; color: #374151; }
+

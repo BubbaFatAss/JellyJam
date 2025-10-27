@@ -46,7 +46,7 @@
       <button id="animation-stop">Stop</button>
       <button id="animation-delete" title="Delete selected animation">Delete</button>
     </div>
-    <div style="font-size:0.9rem;color:#666">Pixels update: <span id="update-mode">Initializing...</span>. Hardware-backed when available.</div>
+  <div style="font-size:0.9rem;color:#666">Pixels update: <span id="update-mode" class="status-init">Initializing...</span>. Hardware-backed when available.</div>
   </section>
 
   <style>
@@ -105,7 +105,13 @@
   function setUpdateModeText(text){
     try{
       const el = document.getElementById('update-mode');
-      if(el) el.innerText = text;
+      if(!el) return;
+      el.innerText = text;
+      el.classList.remove('status-push','status-poll','status-init','status-disconnected');
+      if(text && text.toLowerCase().includes('push')) el.classList.add('status-push');
+      else if(text && text.toLowerCase().includes('poll')) el.classList.add('status-poll');
+      else if(text && text.toLowerCase().includes('disconnected')) el.classList.add('status-disconnected');
+      else el.classList.add('status-init');
     }catch(e){}
   }
 
@@ -152,6 +158,14 @@
           socket.on('disconnect', ()=>{ setUpdateModeText('Socket.IO (disconnected)'); });
           socket.on('display_update', (data)=>{
             try{ applyPixels(data.pixels || []); }catch(e){}
+          });
+          // nowplaying event (no-op here but available for clients that show metadata)
+          socket.on('nowplaying', (data)=>{
+            try{ /* placeholder in case we want to show now-playing on display page */ }catch(e){}
+          });
+          // rotary2 mode updates
+          socket.on('rotary2_mode', (data)=>{
+            try{ document.getElementById('rotary2-mode').innerText = (data && data.mode) ? data.mode : 'skip'; }catch(e){}
           });
           // Successful socket setup
           setUpdateModeText('Socket.IO (push)');
@@ -319,17 +333,18 @@
     });
   }
 
-  // Poll rotary2 mode indicator
-  async function loadRotary2Mode(){
-    try{
-      const r = await fetch('/api/rotary2/mode');
-      if(!r.ok) return;
-      const j = await r.json();
-      document.getElementById('rotary2-mode').innerText = j.mode || 'skip';
-    }catch(e){}
-  }
-  setInterval(loadRotary2Mode, 1000);
-  loadRotary2Mode();
+  // Try to use Socket.IO for rotary2 mode updates; fall back to polling
+  (async function(){
+    const ok = await setupSocketIO();
+    if(!ok){
+      // polling fallback
+      async function loadRotary2Mode(){
+        try{ const r = await fetch('/api/rotary2/mode'); if(!r.ok) return; const j = await r.json(); document.getElementById('rotary2-mode').innerText = j.mode || 'skip'; }catch(e){}
+      }
+      setInterval(loadRotary2Mode, 1000);
+      loadRotary2Mode();
+    }
+  })();
   </script>
 
 {% endblock %}

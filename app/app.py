@@ -182,10 +182,48 @@ def _trigger_animation_for_current_track(async_run: bool = True):
 
 
 # Register a track-change callback on the player so playback events (local)
-# can immediately trigger per-track animations without waiting for the poller.
+# can immediately trigger per-track animations and notify connected clients
+# via Socket.IO. If socketio is not available, clients will fall back to
+# polling /api/nowplaying.
 try:
-    # prefer async trigger so the callback returns quickly
-    player.register_track_change_callback(lambda: _trigger_animation_for_current_track(async_run=True))
+    def _on_track_change():
+        try:
+            _trigger_animation_for_current_track(async_run=True)
+        except Exception:
+            pass
+        try:
+            if socketio is not None:
+                socketio.emit('nowplaying', player.now_playing() or {})
+        except Exception:
+            pass
+
+    player.register_track_change_callback(_on_track_change)
+except Exception:
+    pass
+
+# If Socket.IO is available, start a small broadcaster that emits frequent
+# now-playing updates (position/progress) so clients can show a live progress
+# bar. If Socket.IO is not present clients can poll /api/nowplaying instead.
+try:
+    if socketio is not None:
+        def _start_nowplaying_broadcaster(interval_s=1.0):
+            import threading, time
+
+            def _broadcaster():
+                while True:
+                    try:
+                        socketio.emit('nowplaying', player.now_playing() or {})
+                    except Exception:
+                        pass
+                    try:
+                        time.sleep(interval_s)
+                    except Exception:
+                        pass
+
+            t = threading.Thread(target=_broadcaster, daemon=True)
+            t.start()
+
+        _start_nowplaying_broadcaster()
 except Exception:
     pass
 
@@ -384,6 +422,11 @@ try:
                 global rotary2_mode
                 try:
                     rotary2_mode = 'brightness' if rotary2_mode != 'brightness' else 'skip'
+                except Exception:
+                    pass
+                try:
+                    if socketio is not None:
+                        socketio.emit('rotary2_mode', {'mode': rotary2_mode})
                 except Exception:
                     pass
 
@@ -977,6 +1020,20 @@ if _HAVE_SOCKETIO:
                     socketio.emit('display_update', {'width': matrix.width, 'height': matrix.height, 'pixels': matrix.get_pixels()})
                 except Exception:
                     pass
+        except Exception:
+            pass
+
+        # Also send initial now-playing and rotary2 mode so clients get a full
+        # initial state without polling.
+        try:
+            try:
+                socketio.emit('nowplaying', player.now_playing() or {})
+            except Exception:
+                pass
+            try:
+                socketio.emit('rotary2_mode', {'mode': rotary2_mode})
+            except Exception:
+                pass
         except Exception:
             pass
 
