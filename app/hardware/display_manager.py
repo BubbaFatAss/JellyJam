@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 import json
+import threading
+import time
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 
@@ -38,9 +40,23 @@ class BasePlugin:
         self.cfg = cfg or {}
         # callback to notify when pixels change: cb(list_of_hex)
         self._on_update = None
+        # animation playback state
+        self._anim_thread = None
+        self._anim_stop = threading.Event()
+        self._anim_lock = threading.Lock()
 
     def set_on_update(self, cb):
         self._on_update = cb
+
+    def fast_write_flat(self, flat_pixels: Optional[List[str]]):
+        """Optional fast-path for writing a flat row-major list of hex colors.
+
+        Default implementation falls back to set_pixels. Plugins that have
+        direct hardware access can override this to perform a faster write.
+        """
+        if flat_pixels is None:
+            return
+        return self.set_pixels(flat_pixels)
 
     # New preferred API: accept a PIL Image and render it to the matrix.
     def show_image(self, img: 'Image.Image'):
@@ -95,16 +111,191 @@ class BasePlugin:
         return 0
 
     def play_animation_from_gif(self, path: str, speed: float = 1.0, loop: bool = True):
-        raise NotImplementedError()
+        # Generic GIF playback implementation using PIL. Runs in a background thread.
+        if not _HAVE_PIL:
+            log.warning('PIL not available; cannot play GIF')
+            return
+        # stop any existing animation
+        try:
+            self.stop_animation()
+        except Exception:
+            pass
+
+        def _runner():
+            try:
+                from PIL import Image, ImageSequence
+                im = Image.open(path)
+                frames = []
+                durations = []
+                for frame in ImageSequence.Iterator(im):
+                    f = frame.convert('RGB').resize((self.width, self.height), Image.NEAREST)
+                    frames.append(f.copy())
+                    dur = frame.info.get('duration', 100)
+                    durations.append(dur / 1000.0)
+                if not frames:
+                    return
+                self._anim_stop.clear()
+                while not self._anim_stop.is_set():
+                    for idx, f in enumerate(frames):
+                        if self._anim_stop.is_set():
+                            break
+                        try:
+                            # prefer plugin image API
+                            try:
+                                self.show_image(f)
+                            except Exception:
+                                # fallback: build flat pixels and use plugin fast-write when available
+                                flat = []
+                                for y in range(self.height):
+                                    for x in range(self.width):
+                                        r, g, b = f.getpixel((x, y))
+                                        flat.append('#%02X%02X%02X' % (r, g, b))
+                                try:
+                                    self.fast_write_flat(flat)
+                                except Exception:
+                                    try:
+                                        self.set_pixels(flat)
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            log.exception('Error applying animation frame')
+                        # wait honoring speed and stop flag
+                        delay = max(0.01, durations[idx] / max(0.001, float(speed)))
+                        waited = 0.0
+                        while waited < delay and not self._anim_stop.is_set():
+                            time.sleep(min(0.05, delay - waited))
+                            waited += min(0.05, delay - waited)
+                    if not loop:
+                        break
+            except Exception:
+                log.exception('GIF animation playback failed')
+            finally:
+                # mark finished
+                try:
+                    with self._anim_lock:
+                        self._anim_thread = None
+                        self._anim_stop.clear()
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_runner, daemon=True)
+        with self._anim_lock:
+            self._anim_thread = t
+            self._anim_stop.clear()
+            t.start()
 
     def play_wled_json(self, path: str, speed: float = 1.0, loop: bool = True):
-        raise NotImplementedError()
+        # Generic WLED-style JSON playback. Supports simple lists of frames
+        # where each frame is either a flat list of hex colors or a nested
+        # list-of-rows. Runs in a background thread similar to GIF playback.
+        try:
+            self.stop_animation()
+        except Exception:
+            pass
+        def _runner():
+            try:
+                text = Path(path).read_text()
+                # try to parse one or more JSON objects
+                objs = []
+                try:
+                    objs = json.loads(text)
+                except Exception:
+                    # attempt to parse multiple concatenated JSON objects
+                    decoder = json.JSONDecoder()
+                    idx = 0
+                    text_len = len(text)
+                    while True:
+                        while idx < text_len and text[idx].isspace():
+                            idx += 1
+                        if idx >= text_len:
+                            break
+                        try:
+                            obj, end = decoder.raw_decode(text, idx)
+                            objs.append(obj)
+                            idx = end
+                        except ValueError:
+                            break
+                frames = []
+                # normalize various shapes
+                if isinstance(objs, dict):
+                    # some WLED exports wrap frames in a key
+                    if 'frames' in objs and isinstance(objs['frames'], list):
+                        frames = objs['frames']
+                    else:
+                        # try to treat dict as single frame
+                        frames = [objs]
+                elif isinstance(objs, list):
+                    frames = objs
+                else:
+                    frames = [objs]
+
+                if not frames:
+                    return
+                self._anim_stop.clear()
+                while not self._anim_stop.is_set():
+                    for fr in frames:
+                        if self._anim_stop.is_set():
+                            break
+                        # each frame may be a list of colors or a dict containing 'pixels' and optional 'duration'
+                        duration = 0.1
+                        payload = fr
+                        if isinstance(fr, dict):
+                            duration = float(fr.get('duration', duration))
+                            payload = fr.get('pixels', fr.get('frame', fr))
+                        # apply pixels
+                        try:
+                            if isinstance(payload, list):
+                                # payload may be nested or flat
+                                # prefer fast write when available
+                                try:
+                                    self.fast_write_flat(payload)
+                                except Exception:
+                                    self.set_pixels(payload)
+                            else:
+                                log.warning('Unsupported frame payload type for WLED JSON: %s', type(payload))
+                        except Exception:
+                            log.exception('Failed to apply WLED frame')
+                        # wait
+                        delay = max(0.01, float(duration) / max(0.001, float(speed)))
+                        waited = 0.0
+                        while waited < delay and not self._anim_stop.is_set():
+                            time.sleep(min(0.05, delay - waited))
+                            waited += min(0.05, delay - waited)
+                    if not loop:
+                        break
+            except Exception:
+                log.exception('WLED JSON animation playback failed')
+            finally:
+                try:
+                    with self._anim_lock:
+                        self._anim_thread = None
+                        self._anim_stop.clear()
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_runner, daemon=True)
+        with self._anim_lock:
+            self._anim_thread = t
+            self._anim_stop.clear()
+            t.start()
 
     def stop_animation(self):
-        return
+        try:
+            with self._anim_lock:
+                if self._anim_thread and self._anim_thread.is_alive():
+                    self._anim_stop.set()
+                    self._anim_thread.join(timeout=2.0)
+                    self._anim_thread = None
+                    self._anim_stop.clear()
+        except Exception:
+            log.exception('Failed to stop animation')
 
     def is_animating(self) -> bool:
-        return False
+        try:
+            with self._anim_lock:
+                return bool(self._anim_thread and self._anim_thread.is_alive())
+        except Exception:
+            return False
 
     def show_volume_bar(self, volume: int, duration_ms: int = 1500, color: str = '#00FF00', mode: str = 'overlay'):
         return
@@ -168,6 +359,20 @@ class WS2812Plugin(BasePlugin):
         except Exception:
             log.exception('WS2812Plugin failed to show_image')
 
+    def fast_write_flat(self, flat_pixels: Optional[List[str]]):
+        # If legacy impl has hardware handle, use fast helper; otherwise fallback
+        try:
+            if getattr(self, '_impl', None) is not None and getattr(self._impl, '_hw', None) is not None:
+                try:
+                    from .ledmatrix import write_hw_buffer
+                    write_hw_buffer(getattr(self._impl, '_hw'), flat_pixels, self.width, self.height, getattr(self._impl, '_serpentine', False))
+                    return
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return super().fast_write_flat(flat_pixels)
+
     def set_pixels(self, pixels: Optional[List[str]] = None, bypass_overlay: bool = False):
         if self._impl is None:
             return
@@ -195,24 +400,37 @@ class WS2812Plugin(BasePlugin):
             return 0
 
     def play_animation_from_gif(self, path: str, speed: float = 1.0, loop: bool = True):
-        if self._impl is None:
-            return
-        return self._impl.play_animation_from_gif(path, speed=speed, loop=loop)
+        # prefer legacy implementation when available, otherwise use BasePlugin
+        if self._impl is not None and hasattr(self._impl, 'play_animation_from_gif'):
+            try:
+                return self._impl.play_animation_from_gif(path, speed=speed, loop=loop)
+            except Exception:
+                log.exception('legacy play_animation_from_gif failed; falling back')
+        return super().play_animation_from_gif(path, speed=speed, loop=loop)
 
     def play_wled_json(self, path: str, speed: float = 1.0, loop: bool = True):
-        if self._impl is None:
-            return
-        return self._impl.play_wled_json(path, speed=speed, loop=loop)
+        if self._impl is not None and hasattr(self._impl, 'play_wled_json'):
+            try:
+                return self._impl.play_wled_json(path, speed=speed, loop=loop)
+            except Exception:
+                log.exception('legacy play_wled_json failed; falling back')
+        return super().play_wled_json(path, speed=speed, loop=loop)
 
     def stop_animation(self):
-        if self._impl is None:
-            return
-        return self._impl.stop_animation()
+        if self._impl is not None and hasattr(self._impl, 'stop_animation'):
+            try:
+                return self._impl.stop_animation()
+            except Exception:
+                log.exception('legacy stop_animation failed; falling back')
+        return super().stop_animation()
 
     def is_animating(self) -> bool:
-        if self._impl is None:
-            return False
-        return self._impl.is_animating()
+        if self._impl is not None and hasattr(self._impl, 'is_animating'):
+            try:
+                return bool(self._impl.is_animating())
+            except Exception:
+                log.exception('legacy is_animating failed; falling back')
+        return super().is_animating()
 
     def show_volume_bar(self, volume: int, duration_ms: int = 1500, color: str = '#00FF00', mode: str = 'overlay'):
         if self._impl is None:
@@ -230,7 +448,15 @@ class RGBMatrixPlugin(BasePlugin):
     def __init__(self, width: int, height: int, cfg: Optional[Dict[str, Any]] = None):
         super().__init__(width, height, cfg)
         self._hardware = None
-        self._buffer = ['#000000'] * (self.width * self.height)
+        # use a PIL image buffer when possible; fall back to list of hex strings
+        if _HAVE_PIL:
+            try:
+                self._buffer_img = Image.new('RGB', (self.width, self.height))
+            except Exception:
+                self._buffer_img = None
+        else:
+            self._buffer_img = None
+        self._buffer = ['#000000'] * (self.width * self.height) if self._buffer_img is None else None
         # try to initialize rgbmatrix
         try:
             from rgbmatrix import RGBMatrix, RGBMatrixOptions
@@ -272,24 +498,83 @@ class RGBMatrixPlugin(BasePlugin):
                         return
                 except Exception:
                     log.exception('RGBMatrix hardware image set failed; falling back to buffer')
-            # Fallback: update internal buffer and call on_update so UI can mirror
-            flat = []
-            for y in range(self.height):
-                for x in range(self.width):
-                    r, g, b = im.getpixel((x, y))
-                    flat.append('#%02X%02X%02X' % (r, g, b))
-            self._buffer = flat
-            if self._on_update:
-                try:
-                    self._on_update(list(self._buffer))
-                except Exception:
-                    log.exception('RGBMatrixPlugin on_update callback failed')
+            # Fallback: store PIL image in buffer and call on_update so UI can mirror
+            try:
+                # prefer storing the PIL image buffer
+                self._buffer_img = im
+                # also update flat buffer for older consumers
+                flat = []
+                for y in range(self.height):
+                    for x in range(self.width):
+                        r, g, b = im.getpixel((x, y))
+                        flat.append('#%02X%02X%02X' % (r, g, b))
+                self._buffer = flat
+                if self._on_update:
+                    try:
+                        self._on_update(list(self._buffer))
+                    except Exception:
+                        log.exception('RGBMatrixPlugin on_update callback failed')
+            except Exception:
+                log.exception('RGBMatrixPlugin buffering failed')
         except Exception:
             log.exception('RGBMatrixPlugin show_image failed')
 
+    def fast_write_flat(self, flat_pixels: Optional[List[str]]):
+        """Fast write for rgbmatrix: build a PIL image and push via hardware if available."""
+        if flat_pixels is None:
+            return
+        # normalize length
+        expected = self.width * self.height
+        fp = list(flat_pixels)
+        if len(fp) < expected:
+            fp.extend(['#000000'] * (expected - len(fp)))
+        if len(fp) > expected:
+            fp = fp[:expected]
+        # write into PIL image
+        if _HAVE_PIL:
+            try:
+                img = Image.new('RGB', (self.width, self.height))
+                for y in range(self.height):
+                    for x in range(self.width):
+                        hexc = fp[y * self.width + x].lstrip('#')
+                        try:
+                            r = int(hexc[0:2], 16); g = int(hexc[2:4], 16); b = int(hexc[4:6], 16)
+                        except Exception:
+                            r, g, b = 0, 0, 0
+                        img.putpixel((x, y), (r, g, b))
+                # attempt hardware push
+                if self._hardware is not None:
+                    try:
+                        if hasattr(self._hardware, 'SetImage'):
+                            self._hardware.SetImage(img); return
+                        if hasattr(self._hardware, 'SetFramebuffer'):
+                            self._hardware.SetFramebuffer(img); return
+                    except Exception:
+                        log.exception('RGBMatrix hardware fast write failed; falling back')
+                # update internal buffer and notify
+                self._buffer_img = img
+                self._buffer = fp
+                if self._on_update:
+                    try:
+                        self._on_update(list(self._buffer))
+                    except Exception:
+                        log.exception('RGBMatrixPlugin on_update callback failed')
+                return
+            except Exception:
+                log.exception('RGBMatrixPlugin fast_write_flat failed')
+        # fallback
+        return super().fast_write_flat(fp)
+
     def set_pixels(self, pixels: Optional[List[str]] = None, bypass_overlay: bool = False):
+        # If a volume overlay is active in 'pause' mode, block writes unless bypass_overlay is True
+        try:
+            if getattr(self, '_vol_overlay_active', False) and not bypass_overlay and getattr(self, '_vol_overlay_mode', 'overlay') == 'pause':
+                return
+        except Exception:
+            pass
         if pixels is None:
             return
+        # normalize to flat list of hex colors
         flat = []
         if isinstance(pixels, list) and pixels and isinstance(pixels[0], list):
             for row in pixels:
@@ -303,6 +588,55 @@ class RGBMatrixPlugin(BasePlugin):
             flat.extend(['#000000'] * (expected - len(flat)))
         if len(flat) > expected:
             flat = flat[:expected]
+
+        # write into PIL buffer if available
+        if self._buffer_img is not None:
+            try:
+                # If an overlay is active in 'overlay' mode and this write is not explicitly bypassing,
+                # merge the overlay pixels onto the new buffer so the overlay remains visible.
+                try:
+                    if getattr(self, '_vol_overlay_active', False) and not bypass_overlay and getattr(self, '_vol_overlay_mode', 'overlay') == 'overlay':
+                        overpix = getattr(self, '_vol_overlay_pixels', None)
+                        if isinstance(overpix, list) and len(overpix) == expected:
+                            for i, v in enumerate(overpix):
+                                try:
+                                    if v and v != '#000000':
+                                        flat[i] = v
+                                except Exception:
+                                    continue
+                except Exception:
+                    pass
+
+                for y in range(self.height):
+                    for x in range(self.width):
+                        hexc = flat[y * self.width + x].lstrip('#')
+                        try:
+                            r = int(hexc[0:2], 16); g = int(hexc[2:4], 16); b = int(hexc[4:6], 16)
+                        except Exception:
+                            r, g, b = 0, 0, 0
+                        self._buffer_img.putpixel((x, y), (r, g, b))
+                # update fallback flat buffer too
+                self._buffer = flat
+                # if hardware available, try to push the PIL image
+                if self._hardware is not None:
+                    try:
+                        if hasattr(self._hardware, 'SetImage'):
+                            self._hardware.SetImage(self._buffer_img)
+                        elif hasattr(self._hardware, 'SetFramebuffer'):
+                            self._hardware.SetFramebuffer(self._buffer_img)
+                    except Exception:
+                        log.exception('RGBMatrix hardware image set failed during set_pixels')
+                # notify UI
+                if self._on_update:
+                    try:
+                        self._on_update(list(self._buffer))
+                    except Exception:
+                        log.exception('RGBMatrixPlugin on_update callback failed')
+                return
+            except Exception:
+                log.exception('RGBMatrixPlugin failed to write to image buffer')
+
+        # fallback: keep flat buffer and notify
         self._buffer = flat
         if self._on_update:
             try:
@@ -311,14 +645,157 @@ class RGBMatrixPlugin(BasePlugin):
                 log.exception('RGBMatrixPlugin on_update callback failed')
 
     def get_pixels(self):
-        return list(self._buffer)
+        # prefer reading from PIL image buffer when present
+        if self._buffer_img is not None:
+            try:
+                flat = []
+                for y in range(self.height):
+                    for x in range(self.width):
+                        r, g, b = self._buffer_img.getpixel((x, y))
+                        flat.append('#%02X%02X%02X' % (r, g, b))
+                return flat
+            except Exception:
+                log.exception('Failed to read pixels from image buffer')
+        # fallback
+        return list(self._buffer) if self._buffer is not None else ['#000000'] * (self.width * self.height)
 
-    def stop_animation(self):
-        # animations not supported in this simple plugin; no-op
-        return
+    def set_brightness(self, percent: int):
+        if self._hardware is not None:
+            try:
+                self._hardware.brightness = max(0, min(100, int(percent)))
+            except Exception:
+                log.exception('RGBMatrixPlugin set_brightness failed')
 
-    def is_animating(self) -> bool:
-        return False
+    def get_brightness(self) -> int:
+        if self._hardware is not None:
+            try:
+                return self._hardware.brightness
+            except Exception:
+                log.exception('RGBMatrixPlugin get_brightness failed')
+        return 100
+
+    def show_volume_bar(self, volume: int, duration_ms: int = 1500, color: str = '#00FF00', mode: str = 'overlay'):
+        """Display a temporary volume bar on the bottom row similar to legacy LEDMatrix.
+
+        This implementation snapshots the current buffer, writes an overlay for
+        the requested duration, and then restores the snapshot (unless cancelled).
+        """
+        try:
+            v = int(volume)
+        except Exception:
+            return
+        v = max(0, min(100, v))
+
+        # cancel previous overlay if present
+        try:
+            prev_ev = getattr(self, '_vol_overlay_stop', None)
+            if prev_ev is not None:
+                try:
+                    prev_ev.set()
+                except Exception:
+                    pass
+            prev_th = getattr(self, '_vol_overlay_thread', None)
+            if prev_th is not None and prev_th.is_alive():
+                try:
+                    prev_th.join(timeout=0.2)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # normalize color
+        try:
+            c = str(color or '#00FF00').strip()
+            if not c.startswith('#'):
+                c = '#' + c
+            if len(c) == 4:
+                c = '#' + c[1]*2 + c[2]*2 + c[3]*2
+            c = c.upper()
+        except Exception:
+            c = '#00FF00'
+
+        m = str(mode or 'overlay').lower()
+        if m not in ('overlay', 'pause'):
+            m = 'overlay'
+
+        stop_ev = threading.Event()
+        self._vol_overlay_stop = stop_ev
+        try:
+            self._vol_overlay_active = True
+            self._vol_overlay_mode = m
+        except Exception:
+            pass
+
+        def _runner():
+            try:
+                # snapshot current buffer
+                snap = self.get_pixels()
+                w = self.width
+                h = self.height
+                filled = int(round((v / 100.0) * w))
+                over = list(snap)
+                row_start = (h - 1) * w
+                try:
+                    hexc = c.lstrip('#')
+                    fr = int(hexc[0:2], 16); fg = int(hexc[2:4], 16); fb = int(hexc[4:6], 16)
+                except Exception:
+                    fr, fg, fb = 0, 255, 0
+                dr = max(0, int(fr * 0.12)); dg = max(0, int(fg * 0.12)); db = max(0, int(fb * 0.12))
+                filled_color = '#%02X%02X%02X' % (fr, fg, fb)
+                empty_color = '#%02X%02X%02X' % (dr, dg, db)
+                for x in range(w):
+                    idx = row_start + x
+                    if x < filled:
+                        over[idx] = filled_color
+                    else:
+                        over[idx] = empty_color
+                try:
+                    # store overlay pixels for merging by set_pixels
+                    try:
+                        self._vol_overlay_pixels = list(over)
+                    except Exception:
+                        self._vol_overlay_pixels = None
+                    # write overlay bypassing overlay check so it always appears
+                    try:
+                        self.set_pixels(over, bypass_overlay=True)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+                # wait for duration or stop
+                waited = 0.0
+                interval = 0.05
+                total = max(0, int(duration_ms) / 1000.0)
+                while not stop_ev.is_set() and waited < total:
+                    time.sleep(interval)
+                    waited += interval
+
+                # restore snapshot if not cancelled
+                if not stop_ev.is_set():
+                    try:
+                        try:
+                            self.set_pixels(snap, bypass_overlay=True)
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+            finally:
+                try:
+                    self._vol_overlay_thread = None
+                    self._vol_overlay_stop = None
+                    self._vol_overlay_active = False
+                    self._vol_overlay_mode = 'overlay'
+                    try:
+                        self._vol_overlay_pixels = None
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_runner, daemon=True)
+        self._vol_overlay_thread = t
+        t.start()
 
 
 class DisplayManager:
@@ -398,8 +875,8 @@ class DisplayManager:
             try:
                 return self._plugin.get_brightness()
             except Exception:
-                return 0
-        return 0
+                return 100
+        return 100
 
     def play_animation_from_gif(self, path: str, speed: float = 1.0, loop: bool = True):
         if self._plugin:

@@ -11,8 +11,9 @@
     {% set MATRIX_H = (_p.get('height') if _p.get('height') is not none else (_p.get('rows') if _p.get('rows') is not none else 16)) %}
 
     <p>Live mirror of the {{ MATRIX_W }}×{{ MATRIX_H }} LED matrix.</p>
-    <div id="led-matrix" style="margin:1rem 0; display:grid; gap:6px; justify-items:center; align-items:center;">
-      {# cells will be rendered by JS based on MATRIX_W x MATRIX_H #}
+    <div id="led-matrix" style="margin:1rem 0; display:flex; justify-content:center; align-items:center;">
+      <!-- Canvas-based renderer (much faster for large matrices) -->
+      <canvas id="led-canvas" style="image-rendering: pixelated; background:#000; display:block; border-radius:6px;"></canvas>
     </div>
     <div style="display:flex;gap:1rem;align-items:center;margin-top:.5rem">
       <label for="display-brightness">Brightness</label>
@@ -58,64 +59,58 @@
   </section>
 
   <style>
-  /* Make each cell look like a glowing LED */
-  .led-cell {
-    width: 100%;
-    height: 100%;
-    /* square pixels (small rounded corners for aesthetics) */
-    border-radius: 4px;
-    /* subtle inset for depth */
-    box-shadow: inset 0 0 4px rgba(0,0,0,0.6);
-    transition: background-color 120ms linear, box-shadow 120ms linear;
-    background: #000;
-  }
-  .led-glow{
-    /* default outer glow (JS will overwrite with colored glow per-pixel) */
-    box-shadow: 0 0 8px rgba(255,255,255,0.12);
-  }
+  /* Canvas renderer styling */
+  #led-canvas { max-width: 100%; height: auto; }
   </style>
 
   <script>
-  // Build grid cells based on configured matrix size
+  // Build canvas-based renderer for performance on large matrices
   const MATRIX_W = {{ MATRIX_W|int }}, MATRIX_H = {{ MATRIX_H|int }};
   const matrixEl = document.getElementById('led-matrix');
-  const cells = [];
-  // visual layout: choose a reasonable cell size so the matrix fits on screen
-  const GAP = 6;
+  const canvas = document.getElementById('led-canvas');
+  const ctx = canvas.getContext('2d');
+  // choose visual scale so it fits comfortably on screen
   const MAX_SIDE_PX = 640; // maximum width/height for the rendered matrix
-  const cellSize = Math.max(6, Math.floor(MAX_SIDE_PX / Math.max(MATRIX_W, MATRIX_H)));
-  matrixEl.style.gridTemplateColumns = `repeat(${MATRIX_W}, ${cellSize}px)`;
-  matrixEl.style.gap = GAP + 'px';
-  // set explicit container size so the grid doesn't collapse
-  matrixEl.style.width = (cellSize * MATRIX_W + GAP * (MATRIX_W - 1)) + 'px';
-  matrixEl.style.height = (cellSize * MATRIX_H + GAP * (MATRIX_H - 1)) + 'px';
-  for(let i=0;i<MATRIX_W*MATRIX_H;i++){
-    const d = document.createElement('div');
-    d.className = 'led-cell';
-    d.style.width = cellSize + 'px'; d.style.height = cellSize + 'px';
-    matrixEl.appendChild(d);
-    cells.push(d);
+  const scale = Math.max(1, Math.floor(MAX_SIDE_PX / Math.max(MATRIX_W, MATRIX_H)));
+  // logical canvas size is the matrix size; CSS scale makes pixels larger
+  canvas.width = MATRIX_W;
+  canvas.height = MATRIX_H;
+  canvas.style.width = (MATRIX_W * scale) + 'px';
+  canvas.style.height = (MATRIX_H * scale) + 'px';
+  // disable image smoothing so scaling remains crisp
+  ctx.imageSmoothingEnabled = false;
+
+  // Reusable ImageData buffer for fast pixel writes
+  let imageData = ctx.createImageData(MATRIX_W, MATRIX_H);
+
+  function hexToRGBA(hex){
+    if(!hex) return [0,0,0,255];
+    const s = String(hex).replace('#','');
+    if(s.length === 3){
+      const r = parseInt(s[0]+s[0],16); const g = parseInt(s[1]+s[1],16); const b = parseInt(s[2]+s[2],16);
+      return [r,g,b,255];
+    }
+    const r = parseInt(s.substring(0,2),16); const g = parseInt(s.substring(2,4),16); const b = parseInt(s.substring(4,6),16);
+    return [r,g,b,255];
   }
 
-  // Shared pixel application routine
+  // Shared pixel application routine using ImageData -> putImageData
   function applyPixels(pix){
     try{
-      for(let i=0;i<cells.length;i++){
-        const color = (pix && pix[i]) ? pix[i] : '#000000';
-        cells[i].style.background = color;
-        const c = color.replace('#','');
-        const rC = parseInt(c.substring(0,2),16);
-        const gC = parseInt(c.substring(2,4),16);
-        const bC = parseInt(c.substring(4,6),16);
-        const lum = (0.2126*rC + 0.7152*gC + 0.0722*bC)/255;
-        if(lum > 0.05){
-          cells[i].classList.add('led-glow');
-          cells[i].style.boxShadow = `0 0 ${6+lum*18}px rgba(${rC},${gC},${bC},0.6)`;
-        } else {
-          cells[i].classList.remove('led-glow');
-          cells[i].style.boxShadow = '0 0 6px rgba(0,0,0,0.6) inset';
-        }
+      const num = MATRIX_W * MATRIX_H;
+      // clamp/normalize list
+      const arr = Array.isArray(pix) ? pix : [];
+      for(let i=0;i<num;i++){
+        const c = arr[i] || '#000000';
+        const off = i * 4;
+        const rgba = hexToRGBA(c);
+        imageData.data[off] = rgba[0];
+        imageData.data[off+1] = rgba[1];
+        imageData.data[off+2] = rgba[2];
+        imageData.data[off+3] = 255;
       }
+      // draw to canvas (scale happens via CSS)
+      ctx.putImageData(imageData, 0, 0);
     }catch(e){/* ignore */}
   }
 

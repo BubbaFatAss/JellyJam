@@ -108,216 +108,15 @@ class LEDMatrix:
         return int(getattr(self, '_brightness_percent', int(os.environ.get('LED_BRIGHTNESS', '64')) * 100 / 255))
 
     # --- Animation support ---
-    def play_animation_from_gif(self, path: str, speed: float = 1.0, loop: bool = True):
-        """Load a GIF and play it on the matrix in background.
+    # Animation playback moved into the display manager plugin layer (BasePlugin).
+    # Legacy LEDMatrix no longer implements GIF animation playback so that the
+    # application-wide plugin system can provide a single, shared implementation.
 
-        speed: multiplier for frame durations (1.0 = normal, 2.0 = twice as fast)
-        loop: whether to loop indefinitely
-        """
-        if not _HAVE_PIL:
-            raise RuntimeError('Pillow not available')
-        p = Path(path)
-        if not p.exists():
-            raise FileNotFoundError(path)
-        # stop existing animation
-        self.stop_animation()
-        frames = []
-        durations = []
-        try:
-            img = Image.open(str(p))
-            for frame in ImageSequence.Iterator(img):
-                f = frame.convert('RGB').resize((self.width, self.height), Image.NEAREST)
-                # convert to row-major hex list
-                pix = []
-                for y in range(self.height):
-                    for x in range(self.width):
-                        r, g, b = f.getpixel((x, y))
-                        pix.append('#%02X%02X%02X' % (r, g, b))
-                frames.append(pix)
-                # frame.info['duration'] in ms; default to 100ms when missing
-                dur = frame.info.get('duration', 100)
-                durations.append(max(20, int(dur / (speed or 1.0))))
-        except Exception:
-            raise
+    # stop_animation handled by BasePlugin in the plugin layer
 
-        if not frames:
-            raise RuntimeError('No frames in GIF')
+    # WLED JSON animation playback moved to the plugin layer (BasePlugin).
 
-        # start thread
-        stop_event = threading.Event()
-        self._anim_stop_event = stop_event
-
-        def _runner():
-            try:
-                while not stop_event.is_set():
-                    for i, pix in enumerate(frames):
-                        if stop_event.is_set():
-                            break
-                        # write frame to buffer and hardware
-                        try:
-                            self.set_pixels(pix)
-                        except Exception:
-                            pass
-                        # sleep for duration (ms)
-                        time.sleep(durations[i] / 1000.0)
-                    if not loop:
-                        break
-            finally:
-                self._anim_stop_event = None
-
-        t = threading.Thread(target=_runner, daemon=True)
-        self._anim_thread = t
-        t.start()
-
-    def stop_animation(self):
-        try:
-            ev = getattr(self, '_anim_stop_event', None)
-            if ev is not None:
-                ev.set()
-            th = getattr(self, '_anim_thread', None)
-            if th is not None and th.is_alive():
-                th.join(timeout=5.0)
-        finally:
-            self._anim_thread = None
-            self._anim_stop_event = None
-
-    def play_wled_json(self, path: str, speed: float = 1.0, loop: bool = True, default_frame_ms: int = 200):
-        """Parse a WLED JSON export (single object or multiple concatenated objects) and play them as frames.
-
-        The parser will extract `seg.i` arrays from each object and convert them into flat pixel frames.
-        If a frame defines a `bri` value it will be applied before showing that frame. Frame durations are taken
-        from an optional `dur` or `duration` field (ms) in the object; otherwise `default_frame_ms` is used.
-        """
-        # ensure Pillow isn't required for this path
-        from pathlib import Path
-        import json, re
-
-        p = Path(path)
-        if not p.exists():
-            raise FileNotFoundError(path)
-
-        # stop any existing animation
-        self.stop_animation()
-
-        raw = p.read_text(encoding='utf-8')
-
-        # Try to parse as a single JSON value first
-        objs = []
-        try:
-            data = json.loads(raw)
-            # If it's a list, treat each element as a frame; if dict, single frame
-            if isinstance(data, list):
-                objs = data
-            elif isinstance(data, dict):
-                objs = [data]
-        except Exception:
-            # Fallback: extract top-level JSON objects with regex and try to parse each
-            matches = re.findall(r"\{.*?\}", raw, flags=re.DOTALL)
-            for m in matches:
-                try:
-                    objs.append(json.loads(m))
-                except Exception:
-                    continue
-
-        if not objs:
-            raise RuntimeError('No JSON objects parsed from WLED file')
-
-        frames = []
-        durations = []
-        bris = []
-        num_pixels = self.width * self.height
-
-        for obj in objs:
-            seg = None
-            if isinstance(obj, dict) and 'seg' in obj:
-                seg = obj['seg']
-            elif isinstance(obj, dict) and 'presets' in obj and isinstance(obj['presets'], list) and obj['presets']:
-                maybe = obj['presets'][0]
-                if isinstance(maybe, dict) and 'seg' in maybe:
-                    seg = maybe['seg']
-
-            if seg is None:
-                # skip objects without seg data
-                continue
-
-            i_array = None
-            if isinstance(seg, dict) and 'i' in seg:
-                i_array = seg['i']
-            elif isinstance(seg, list):
-                parts = []
-                for s in seg:
-                    if isinstance(s, dict) and 'i' in s:
-                        parts.extend(s['i'])
-                i_array = parts
-
-            if not i_array:
-                continue
-
-            pix = parse_wled_i_array(i_array, num_pixels)
-            frames.append(pix)
-
-            # brightness
-            bri = None
-            if isinstance(obj, dict) and 'bri' in obj:
-                try:
-                    b = int(obj.get('bri', 0))
-                    bri = int(max(0, min(100, b * 100 // 255)))
-                except Exception:
-                    bri = None
-            bris.append(bri)
-
-            # duration (ms)
-            dur = None
-            if isinstance(obj, dict):
-                for k in ('dur', 'duration', 'ms'):
-                    if k in obj:
-                        try:
-                            dur = int(obj[k])
-                            break
-                        except Exception:
-                            dur = None
-            if dur is None:
-                dur = default_frame_ms
-            # adjust by speed (speed>1 -> faster -> shorter durations)
-            if speed and speed > 0:
-                dur = max(10, int(dur / speed))
-            durations.append(dur)
-
-        if not frames:
-            raise RuntimeError('No frames extracted from WLED JSON')
-
-        # Start animation thread
-        stop_event = threading.Event()
-        self._anim_stop_event = stop_event
-
-        def _runner():
-            try:
-                while not stop_event.is_set():
-                    for idx, pix in enumerate(frames):
-                        if stop_event.is_set():
-                            break
-                        try:
-                            # apply brightness for this frame if present
-                            if bris[idx] is not None:
-                                try:
-                                    self.set_brightness(int(bris[idx]))
-                                except Exception:
-                                    pass
-                            self.set_pixels(pix)
-                        except Exception:
-                            pass
-                        time.sleep(durations[idx] / 1000.0)
-                    if not loop:
-                        break
-            finally:
-                self._anim_stop_event = None
-
-        t = threading.Thread(target=_runner, daemon=True)
-        self._anim_thread = t
-        t.start()
-
-    def is_animating(self) -> bool:
-        return getattr(self, '_anim_stop_event', None) is not None
+    # is_animating handled by BasePlugin in the plugin layer
 
     def show_volume_bar(self, volume: int, duration_ms: int = 1500, color: str = '#00FF00', mode: str = 'overlay'):
         """Temporarily overlay a green volume bar on the bottom row of the matrix.
@@ -424,17 +223,14 @@ class LEDMatrix:
                     time.sleep(interval)
                     waited += interval
 
-                # restore snapshot if no animation started in the meantime and not stopped
+                # restore snapshot if overlay not cancelled
                 if not stop_ev.is_set():
                     try:
-                        # if mode is 'pause' and there was an animation running, we allowed writes to be blocked
-                        # so we only restore if no animation is running
-                        if not self.is_animating():
-                                try:
-                                    # ensure we can restore snapshot even if pause-mode blocking is active
-                                    self.set_pixels(snap, bypass_overlay=True)
-                                except Exception:
-                                    pass
+                        try:
+                            # restore snapshot; bypass overlay blocking so restore always succeeds
+                            self.set_pixels(snap, bypass_overlay=True)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
             finally:
@@ -573,6 +369,52 @@ class LEDMatrix:
 
 def create_matrix(width: int = 16, height: int = 16) -> LEDMatrix:
     return LEDMatrix(width=width, height=height)
+
+
+def write_hw_buffer(hw, flat_pixels, width, height, serpentine=False):
+    """Fast-write a flat row-major list of hex color strings directly to a hardware PixelStrip.
+
+    This mirrors the per-pixel loop used by LEDMatrix.set_pixels but is exposed as a helper
+    so callers (for example animation runners) can push frames without going through
+    higher-level overlay/merge logic.
+    """
+    try:
+        num = width * height
+        # ensure length
+        if not isinstance(flat_pixels, list):
+            return
+        if len(flat_pixels) < num:
+            flat_pixels = list(flat_pixels) + ['#000000'] * (num - len(flat_pixels))
+        if len(flat_pixels) > num:
+            flat_pixels = flat_pixels[:num]
+
+        for y in range(height):
+            row_start = y * width
+            row = flat_pixels[row_start:row_start + width]
+            if serpentine and (y % 2 == 1):
+                row_iter = list(reversed(row))
+            else:
+                row_iter = row
+            for x, col in enumerate(row_iter):
+                phys_x = x if not (serpentine and (y % 2 == 1)) else (width - 1 - x)
+                idx = y * width + phys_x
+                try:
+                    hexc = col.lstrip('#')
+                    r = int(hexc[0:2], 16); g = int(hexc[2:4], 16); b = int(hexc[4:6], 16)
+                except Exception:
+                    r, g, b = 0, 0, 0
+                try:
+                    color = ws.Color(r, g, b) if ws is not None else ((r << 16) | (g << 8) | b)
+                    hw.setPixelColor(idx, color)
+                except Exception:
+                    # per-pixel write errors are ignorable
+                    pass
+        try:
+            hw.show()
+        except Exception:
+            log.exception('Error calling show() on LED strip')
+    except Exception:
+        log.exception('Error writing to LED matrix hardware')
 
 
 # --- WLED JSON support helper ---

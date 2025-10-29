@@ -448,13 +448,20 @@ try:
     rotary2_mode = 'skip'
     # if socketio available, register a notifier so updates are pushed to clients
     try:
-        if socketio is not None:
-            def _broadcast_pixels(pix):
+            if socketio is not None:
+                def _broadcast_pixels(pix):
+                    try:
+                        socketio.emit('display_update', {'width': matrix.width, 'height': matrix.height, 'pixels': pix})
+                    except Exception:
+                        pass
                 try:
-                    socketio.emit('display_update', {'width': matrix.width, 'height': matrix.height, 'pixels': pix})
+                    matrix.set_on_update(_broadcast_pixels)
                 except Exception:
-                    pass
-            matrix._on_update = _broadcast_pixels
+                    # fallback: set attribute for legacy behavior
+                    try:
+                        matrix._on_update = _broadcast_pixels
+                    except Exception:
+                        pass
     except Exception:
         pass
     # Play a small startup animation if requested (default: enabled)
@@ -474,27 +481,68 @@ try:
                 # fallback to the package static folder
                 static_animations_dir = os.path.join(os.path.dirname(__file__), 'static')
             startup_path = os.path.join(static_animations_dir, startup_name)
-            # If no startup GIF found, try to generate a small placeholder using Pillow
-            if not os.path.exists(startup_path):
-                try:
-                    from PIL import Image, ImageDraw
-                    w = int(os.environ.get('LED_WIDTH', '16'))
-                    h = int(os.environ.get('LED_HEIGHT', '16'))
-                    frames = []
-                    # create 6 frames with a simple sweeping dot
-                    for i in range(6):
-                        im = Image.new('RGB', (w, h), (0, 0, 0))
-                        draw = ImageDraw.Draw(im)
-                        x = i % w
-                        y = (i * 3) % h
-                        # draw a colored dot
-                        draw.rectangle([x, y, x, y], fill=(255, 255, 255))
-                        frames.append(im.resize((w, h), Image.NEAREST))
-                    # save animated GIF
-                    frames[0].save(startup_path, save_all=True, append_images=frames[1:], duration=120, loop=0)
-                except Exception:
-                    # failed to generate placeholder; ignore
-                    pass
+            # Prefer size-specific variants named like <base>_<width>_<height><ext>
+            # (for example startup_64_64.gif). If none is found, fall back to the
+            # configured startup file, and finally generate a small placeholder.
+            base, ext = os.path.splitext(startup_name)
+            try:
+                candidates = []
+                for fn in os.listdir(static_animations_dir):
+                    if not fn.lower().endswith(ext.lower()):
+                        continue
+                    if not fn.startswith(base + '_'):
+                        continue
+                    # expect pattern base_W_H.ext
+                    parts = fn[len(base) + 1: -len(ext)].split('_')
+                    if len(parts) != 2:
+                        continue
+                    try:
+                        w = int(parts[0]); h = int(parts[1])
+                    except Exception:
+                        continue
+                    candidates.append((fn, w, h))
+            except Exception:
+                candidates = []
+
+            # pick the candidate closest in size to the current matrix
+            chosen = None
+            try:
+                target_w = int(os.environ.get('LED_WIDTH', str(matrix.width if matrix is not None else 16)))
+                target_h = int(os.environ.get('LED_HEIGHT', str(matrix.height if matrix is not None else 16)))
+            except Exception:
+                target_w, target_h = (matrix.width if matrix is not None else 16, matrix.height if matrix is not None else 16)
+            best_score = None
+            for fn, w, h in candidates:
+                dx = w - target_w; dy = h - target_h
+                score = dx * dx + dy * dy
+                if best_score is None or score < best_score:
+                    best_score = score
+                    chosen = fn
+
+            if chosen:
+                startup_path = os.path.join(static_animations_dir, chosen)
+            else:
+                # if no size-specific candidate found, use the configured startup file
+                if not os.path.exists(startup_path):
+                    try:
+                        from PIL import Image, ImageDraw
+                        w = int(os.environ.get('LED_WIDTH', '16'))
+                        h = int(os.environ.get('LED_HEIGHT', '16'))
+                        frames = []
+                        # create 6 frames with a simple sweeping dot
+                        for i in range(6):
+                            im = Image.new('RGB', (w, h), (0, 0, 0))
+                            draw = ImageDraw.Draw(im)
+                            x = i % w
+                            y = (i * 3) % h
+                            # draw a colored dot
+                            draw.rectangle([x, y, x, y], fill=(255, 255, 255))
+                            frames.append(im.resize((w, h), Image.NEAREST))
+                        # save animated GIF
+                        frames[0].save(startup_path, save_all=True, append_images=frames[1:], duration=120, loop=0)
+                    except Exception:
+                        # failed to generate placeholder; ignore
+                        pass
             # play it once (non-blocking)
             try:
                 if os.path.exists(startup_path) and hasattr(matrix, 'play_animation_from_gif'):
