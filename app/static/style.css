@@ -26,6 +26,14 @@ button{background:var(--accent);color:white;border:none;padding:.5rem 0.9rem;bor
 .jj-toast-item.visible{opacity:1;transform:translateY(0)}
 footer{max-width:1000px;margin:2rem auto;color:#6b7280;font-size:.9rem}
 
+/* Settings tab buttons */
+.settings-tabs { display:flex; gap:0.5rem; }
+.tab-btn { padding:6px 10px; border-radius:6px; border:1px solid rgba(11,22,40,0.06); background:transparent; cursor:pointer }
+.tab-btn.active { background: linear-gradient(90deg,var(--accent),#6fb1ff); color: white; border-color: transparent }
+.tab-btn:focus { outline: none; box-shadow: 0 0 0 3px rgba(43,140,255,0.12); }
+
+.jj-toast-item.error{ background: linear-gradient(90deg,#ef4444,#dc2626); }
+
 /* Small status badge used for push/poll indicators */
 #update-indicator, #update-mode {
 	display: inline-block;

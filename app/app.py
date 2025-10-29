@@ -4,6 +4,7 @@ from .player.player import Player
 from .nfc.reader import NFCReader
 from .storage import Storage
 import os
+import json
 try:
     from flask_socketio import SocketIO
     _HAVE_SOCKETIO = True
@@ -238,12 +239,202 @@ def artwork_file(filename):
     except Exception:
         return ('', 404)
 
+
+@app.route('/settings', methods=['GET', 'POST'])
+def settings():
+    try:
+        cfg = storage.load() or {}
+    except Exception:
+        cfg = {}
+    disp = cfg.get('display', {}) if isinstance(cfg, dict) else {}
+    def _validate_plugins(p: dict) -> list:
+        """Validate plugins dict shape and return list of error messages (empty if ok)."""
+        errs = []
+        if not isinstance(p, dict):
+            errs.append('Plugins JSON must be an object with plugin keys')
+            return errs
+        # ws2812 validations
+        ws = p.get('ws2812')
+        if ws is not None:
+            if not isinstance(ws, dict):
+                errs.append('ws2812 config must be an object')
+            else:
+                w = ws.get('width')
+                h = ws.get('height')
+                if w is not None:
+                    try:
+                        iw = int(w)
+                        if iw < 1 or iw > 512:
+                            errs.append('ws2812 width must be 1-512')
+                    except Exception:
+                        errs.append('ws2812 width must be an integer')
+                if h is not None:
+                    try:
+                        ih = int(h)
+                        if ih < 1 or ih > 512:
+                            errs.append('ws2812 height must be 1-512')
+                    except Exception:
+                        errs.append('ws2812 height must be an integer')
+        # rgbmatrix validations
+        rg = p.get('rgbmatrix')
+        if rg is not None:
+            if not isinstance(rg, dict):
+                errs.append('rgbmatrix config must be an object')
+            else:
+                for k in ('rows', 'cols'):
+                    if k in rg and rg[k] is not None:
+                        try:
+                            v = int(rg[k])
+                            if v < 8 or v > 2048:
+                                errs.append(f'rgbmatrix {k} must be 8-2048')
+                        except Exception:
+                            errs.append(f'rgbmatrix {k} must be an integer')
+                for k in ('chain', 'parallel'):
+                    if k in rg and rg[k] is not None:
+                        try:
+                            v = int(rg[k])
+                            if v < 1 or v > 64:
+                                errs.append(f'rgbmatrix {k} must be 1-64')
+                        except Exception:
+                            errs.append(f'rgbmatrix {k} must be an integer')
+                if 'gpio_slowdown' in rg and rg.get('gpio_slowdown') is not None:
+                    try:
+                        v = int(rg.get('gpio_slowdown'))
+                        if v < 0 or v > 100:
+                            errs.append('rgbmatrix gpio_slowdown must be 0-100')
+                    except Exception:
+                        errs.append('rgbmatrix gpio_slowdown must be an integer')
+        return errs
+
+    if request.method == 'POST':
+        active = request.form.get('active') or 'ws2812'
+        # If advanced JSON editor provided, prefer it
+        plugins = {}
+        plugins_json_raw = request.form.get('plugins_json', '').strip()
+        if plugins_json_raw:
+            try:
+                p = json.loads(plugins_json_raw)
+                if isinstance(p, dict):
+                    # validate JSON structure
+                    verrs = _validate_plugins(p)
+                    if verrs:
+                        # render template with error messages
+                        err = '; '.join(verrs)
+                        return render_template('settings.html', display_cfg=disp, saved=False, plugins_json=plugins_json_raw, error=err)
+                    plugins = p
+            except Exception:
+                # fall through to structured parsing if JSON invalid
+                return render_template('settings.html', display_cfg=disp, saved=False, plugins_json=plugins_json_raw, error='Invalid JSON in Advanced editor')
+        # Build structured plugin config from form fields (only if plugins empty)
+        if not plugins:
+            # WS2812 fields
+            try:
+                ws_w = request.form.get('ws_width', '').strip()
+                ws_h = request.form.get('ws_height', '').strip()
+                if ws_w or ws_h or request.form.get('ws_serpentine'):
+                    ws_cfg = {}
+                    if ws_w:
+                        try:
+                            ws_cfg['width'] = int(ws_w)
+                        except Exception:
+                            pass
+                    if ws_h:
+                        try:
+                            ws_cfg['height'] = int(ws_h)
+                        except Exception:
+                            pass
+                    if request.form.get('ws_serpentine'):
+                        ws_cfg['serpentine'] = True
+                    plugins['ws2812'] = ws_cfg
+            except Exception:
+                pass
+
+            # RGB Matrix fields
+            try:
+                rgb_rows = request.form.get('rgb_rows', '').strip()
+                rgb_cols = request.form.get('rgb_cols', '').strip()
+                rgb_chain = request.form.get('rgb_chain', '').strip()
+                rgb_parallel = request.form.get('rgb_parallel', '').strip()
+                rgb_gpio = request.form.get('rgb_gpio_slowdown', '').strip()
+                if rgb_rows or rgb_cols or rgb_chain or rgb_parallel or rgb_gpio:
+                    r_cfg = {}
+                    if rgb_rows:
+                        try:
+                            r_cfg['rows'] = int(rgb_rows)
+                        except Exception:
+                            pass
+                    if rgb_cols:
+                        try:
+                            r_cfg['cols'] = int(rgb_cols)
+                        except Exception:
+                            pass
+                    if rgb_chain:
+                        try:
+                            r_cfg['chain'] = int(rgb_chain)
+                        except Exception:
+                            pass
+                    if rgb_parallel:
+                        try:
+                            r_cfg['parallel'] = int(rgb_parallel)
+                        except Exception:
+                            pass
+                    if rgb_gpio:
+                        try:
+                            r_cfg['gpio_slowdown'] = int(rgb_gpio)
+                        except Exception:
+                            pass
+                    plugins['rgbmatrix'] = r_cfg
+            except Exception:
+                pass
+
+        # validate structured result before saving
+        verrs = _validate_plugins(plugins)
+        if verrs:
+            return render_template('settings.html', display_cfg=disp, saved=False, plugins_json=json.dumps(plugins, indent=2), error='; '.join(verrs))
+
+        cfg['display'] = {'active': active, 'plugins': plugins}
+        try:
+            storage.save(cfg)
+        except Exception:
+            pass
+        # apply new selection live if possible
+        try:
+            if matrix is not None:
+                # DisplayManager exposes set_active_plugin
+                try:
+                    matrix.set_active_plugin(active, plugins.get(active, {}))
+                except Exception:
+                    pass
+                if socketio is not None:
+                    def _broadcast_pixels(pix):
+                        try:
+                            socketio.emit('display_update', {'width': matrix.width, 'height': matrix.height, 'pixels': pix})
+                        except Exception:
+                            pass
+                    try:
+                        matrix.set_on_update(_broadcast_pixels)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        return redirect(url_for('settings', saved=1))
+
+    saved_flag = (request.args.get('saved') == '1')
+    # provide plugins JSON for advanced editor
+    try:
+        plugins_json = json.dumps(disp.get('plugins', {}), indent=2)
+    except Exception:
+        plugins_json = '{}'
+    return render_template('settings.html', display_cfg=disp, saved=saved_flag, plugins_json=plugins_json)
+
 # create LED matrix mirror (in-memory buffer, hardware-backed when available)
 try:
-    from .hardware.ledmatrix import create_matrix
+    # Use new display manager which supports multiple plugin backends.
+    from .hardware.display_manager import create_matrix
     MATRIX_W = int(os.environ.get('LED_WIDTH', '16'))
     MATRIX_H = int(os.environ.get('LED_HEIGHT', '16'))
-    matrix = create_matrix(MATRIX_W, MATRIX_H)
+    # pass storage so the display manager can load active plugin/config from storage
+    matrix = create_matrix(MATRIX_W, MATRIX_H, storage=storage)
     # ensure matrix has a sensible initial brightness (0-100)
     try:
         initial_b = int(os.environ.get('LED_BRIGHTNESS_PERCENT', str(int(os.environ.get('LED_BRIGHTNESS','64')) * 100 // 255)))

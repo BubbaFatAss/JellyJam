@@ -1,0 +1,166 @@
+{% extends 'base.html' %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h2>Display Settings</h2>
+<form method="post">
+  <div class="settings-tabs" style="margin-bottom:1rem;">
+    <button type="button" id="tab-basic" class="tab-btn">Basic</button>
+    <button type="button" id="tab-advanced" class="tab-btn">Advanced</button>
+  </div>
+
+  <div id="basic-tab">
+    <div>
+      <label for="active">Active display plugin</label>
+      <select id="active" name="active">
+        <option value="ws2812" {% if display_cfg.active == 'ws2812' %}selected{% endif %}>WS2812 (legacy)</option>
+        <option value="rgbmatrix" {% if display_cfg.active == 'rgbmatrix' %}selected{% endif %}>rpi-rgb-led-matrix</option>
+      </select>
+    </div>
+
+    <hr>
+    <div id="ws-section">
+    <h3>WS2812 (legacy) configuration</h3>
+    <div>
+      <label for="ws_width">Width</label>
+      <input id="ws_width" name="ws_width" type="number" value="{{ (display_cfg.plugins.ws2812.width if display_cfg.plugins is defined and display_cfg.plugins.ws2812 is defined and display_cfg.plugins.ws2812.width is defined else 16) }}">
+    </div>
+    <div>
+      <label for="ws_height">Height</label>
+      <input id="ws_height" name="ws_height" type="number" value="{{ (display_cfg.plugins.ws2812.height if display_cfg.plugins is defined and display_cfg.plugins.ws2812 is defined and display_cfg.plugins.ws2812.height is defined else 16) }}">
+    </div>
+    <div>
+      <label for="ws_serpentine">Serpentine wiring</label>
+      <input id="ws_serpentine" name="ws_serpentine" type="checkbox" value="1" {% if display_cfg.plugins is defined and display_cfg.plugins.ws2812 is defined and display_cfg.plugins.ws2812.serpentine %}checked{% endif %}>
+    </div>
+    </div>
+
+    <hr>
+    <div id="rgb-section">
+    <h3>rpi-rgb-led-matrix configuration</h3>
+    <p style="font-size:0.9rem;color:#666">Fill only values relevant to your hardware; leave blank to use defaults.</p>
+    <div>
+      <label for="rgb_rows">Rows</label>
+      <input id="rgb_rows" name="rgb_rows" type="number" value="{{ (display_cfg.plugins.rgbmatrix.rows if display_cfg.plugins is defined and display_cfg.plugins.rgbmatrix is defined and display_cfg.plugins.rgbmatrix.rows is defined else '') }}">
+    </div>
+    <div>
+      <label for="rgb_cols">Cols</label>
+      <input id="rgb_cols" name="rgb_cols" type="number" value="{{ (display_cfg.plugins.rgbmatrix.cols if display_cfg.plugins is defined and display_cfg.plugins.rgbmatrix is defined and display_cfg.plugins.rgbmatrix.cols is defined else '') }}">
+    </div>
+    <div>
+      <label for="rgb_chain">Chain</label>
+      <input id="rgb_chain" name="rgb_chain" type="number" value="{{ (display_cfg.plugins.rgbmatrix.chain if display_cfg.plugins is defined and display_cfg.plugins.rgbmatrix is defined and display_cfg.plugins.rgbmatrix.chain is defined else '') }}">
+    </div>
+    <div>
+      <label for="rgb_parallel">Parallel</label>
+      <input id="rgb_parallel" name="rgb_parallel" type="number" value="{{ (display_cfg.plugins.rgbmatrix.parallel if display_cfg.plugins is defined and display_cfg.plugins.rgbmatrix is defined and display_cfg.plugins.rgbmatrix.parallel is defined else '') }}">
+    </div>
+    <div>
+      <label for="rgb_gpio_slowdown">gpio_slowdown</label>
+      <input id="rgb_gpio_slowdown" name="rgb_gpio_slowdown" type="number" value="{{ (display_cfg.plugins.rgbmatrix.gpio_slowdown if display_cfg.plugins is defined and display_cfg.plugins.rgbmatrix is defined and display_cfg.plugins.rgbmatrix.gpio_slowdown is defined else '') }}">
+    </div>
+
+    </div>
+    
+    <p style="margin-top:1rem;font-size:0.9rem;color:#666">Note: The <strong>Basic</strong> tab is a convenience wrapper that exposes the most common plugin settings. If you need more control or want to edit additional options, switch to the <strong>Advanced</strong> tab to edit the raw plugin JSON.</p>
+
+  </div>
+
+  <div id="advanced-tab" style="display:none;">
+    <h3>Advanced (raw JSON)</h3>
+    <p style="font-size:0.9rem;color:#666">Edit plugin configuration as raw JSON. Top-level keys are plugin names. Example:
+    <pre>{
+  "ws2812": {"width":16,"height":16,"serpentine":false},
+  "rgbmatrix": {"rows":64,"cols":64,"chain":1}
+}</pre></p>
+    <div>
+      <label for="plugins_json">Plugin JSON</label>
+      <textarea id="plugins_json" name="plugins_json" rows="12" style="width:100%;font-family:monospace;">{{ plugins_json }}</textarea>
+    </div>
+  </div>
+
+  <div style="margin-top:1rem;">
+    <button id="save-btn" type="submit">Save</button>
+    <a href="{{ url_for('index') }}">Cancel</a>
+  </div>
+</form>
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  const select = document.getElementById('active');
+  const wsSectionEl = document.getElementById('ws-section');
+  const rgbSectionEl = document.getElementById('rgb-section');
+
+  function updateVisibility(){
+    const active = select.value;
+    if(active === 'ws2812'){
+      wsSectionEl.style.display = '';
+      rgbSectionEl.style.display = 'none';
+    } else if(active === 'rgbmatrix'){
+      wsSectionEl.style.display = 'none';
+      rgbSectionEl.style.display = '';
+    } else {
+      wsSectionEl.style.display = '';
+      rgbSectionEl.style.display = '';
+    }
+  }
+
+  select.addEventListener('change', updateVisibility);
+  updateVisibility();
+
+  // Tab switching
+  const tabBasic = document.getElementById('tab-basic');
+  const tabAdvanced = document.getElementById('tab-advanced');
+  const basicTab = document.getElementById('basic-tab');
+  const advancedTab = document.getElementById('advanced-tab');
+  function showTab(name){
+    if(name === 'advanced'){
+      basicTab.style.display = 'none'; advancedTab.style.display = '';
+      tabBasic.classList.remove('active'); tabAdvanced.classList.add('active');
+    } else {
+      basicTab.style.display = ''; advancedTab.style.display = 'none';
+      tabBasic.classList.add('active'); tabAdvanced.classList.remove('active');
+    }
+  }
+  tabBasic.addEventListener('click', ()=> showTab('basic'));
+  tabAdvanced.addEventListener('click', ()=> showTab('advanced'));
+  // default to basic
+  showTab('basic');
+
+  const form = select.closest('form');
+  form.addEventListener('submit', function(e){
+    const active = select.value;
+    const saveBtn = document.getElementById('save-btn');
+    function invalid(msg){
+      e.preventDefault();
+      try{ showToast(msg, 3000); }catch(e){ alert(msg); }
+      return false;
+    }
+    if(active === 'ws2812'){
+      const w = document.getElementById('ws_width').value.trim();
+      const h = document.getElementById('ws_height').value.trim();
+      if(w){ const wi = parseInt(w,10); if(isNaN(wi) || wi < 1 || wi > 512) return invalid('WS2812 width must be 1-512'); }
+      if(h){ const hi = parseInt(h,10); if(isNaN(hi) || hi < 1 || hi > 512) return invalid('WS2812 height must be 1-512'); }
+    }
+    if(active === 'rgbmatrix'){
+      const rows = document.getElementById('rgb_rows').value.trim();
+      const cols = document.getElementById('rgb_cols').value.trim();
+      const chain = document.getElementById('rgb_chain').value.trim();
+      const parallel = document.getElementById('rgb_parallel').value.trim();
+      const gpio = document.getElementById('rgb_gpio_slowdown').value.trim();
+      if(rows){ const r = parseInt(rows,10); if(isNaN(r) || r < 8 || r > 2048) return invalid('Rows must be 8-2048'); }
+      if(cols){ const c = parseInt(cols,10); if(isNaN(c) || c < 8 || c > 2048) return invalid('Cols must be 8-2048'); }
+      if(chain){ const v = parseInt(chain,10); if(isNaN(v) || v < 1 || v > 64) return invalid('Chain must be 1-64'); }
+      if(parallel){ const v = parseInt(parallel,10); if(isNaN(v) || v < 1 || v > 64) return invalid('Parallel must be 1-64'); }
+      if(gpio){ const v = parseInt(gpio,10); if(isNaN(v) || v < 0 || v > 100) return invalid('gpio_slowdown must be 0-100'); }
+    }
+    saveBtn.disabled = true;
+    setTimeout(()=>{ saveBtn.disabled = false; }, 3000);
+  });
+});
+</script>
+{% if saved %}
+<script>document.addEventListener('DOMContentLoaded', function(){ showToast('Settings saved', 2500); });</script>
+{% endif %}
+{% if error %}
+<script>document.addEventListener('DOMContentLoaded', function(){ try{ showToast('{{ error|e }}'); }catch(e){ alert('{{ error|e }}'); } var cont=document.getElementById('toast'); if(cont && cont.lastElementChild){ cont.lastElementChild.classList.add('error'); } });</script>
+{% endif %}
+{% endblock %}

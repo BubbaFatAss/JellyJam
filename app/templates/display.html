@@ -2,9 +2,17 @@
 {% block content %}
   <section class="panel">
     <h2>Display</h2>
-    <p>Live mirror of the 16×16 LED matrix.</p>
-    <div id="led-matrix" style="width: 320px; height:320px; margin:1rem 0; display:grid; grid-template-columns: repeat(16, 1fr); gap:6px; justify-items:center; align-items:center;">
-      {# 256 cells rendered by JS #}
+    {# derive active matrix size from config passed in by the view #}
+    {% set _disp = config.get('display', {}) if config is defined else {} %}
+    {% set _active = _disp.get('active','ws2812') %}
+    {% set _plugins = _disp.get('plugins', {}) %}
+    {% set _p = _plugins.get(_active, {}) %}
+    {% set MATRIX_W = (_p.get('width') if _p.get('width') is not none else (_p.get('cols') if _p.get('cols') is not none else 16)) %}
+    {% set MATRIX_H = (_p.get('height') if _p.get('height') is not none else (_p.get('rows') if _p.get('rows') is not none else 16)) %}
+
+    <p>Live mirror of the {{ MATRIX_W }}×{{ MATRIX_H }} LED matrix.</p>
+    <div id="led-matrix" style="margin:1rem 0; display:grid; gap:6px; justify-items:center; align-items:center;">
+      {# cells will be rendered by JS based on MATRIX_W x MATRIX_H #}
     </div>
     <div style="display:flex;gap:1rem;align-items:center;margin-top:.5rem">
       <label for="display-brightness">Brightness</label>
@@ -68,14 +76,23 @@
   </style>
 
   <script>
-  // Build grid cells immediately
-  const MATRIX_W = 16, MATRIX_H = 16;
+  // Build grid cells based on configured matrix size
+  const MATRIX_W = {{ MATRIX_W|int }}, MATRIX_H = {{ MATRIX_H|int }};
   const matrixEl = document.getElementById('led-matrix');
   const cells = [];
+  // visual layout: choose a reasonable cell size so the matrix fits on screen
+  const GAP = 6;
+  const MAX_SIDE_PX = 640; // maximum width/height for the rendered matrix
+  const cellSize = Math.max(6, Math.floor(MAX_SIDE_PX / Math.max(MATRIX_W, MATRIX_H)));
+  matrixEl.style.gridTemplateColumns = `repeat(${MATRIX_W}, ${cellSize}px)`;
+  matrixEl.style.gap = GAP + 'px';
+  // set explicit container size so the grid doesn't collapse
+  matrixEl.style.width = (cellSize * MATRIX_W + GAP * (MATRIX_W - 1)) + 'px';
+  matrixEl.style.height = (cellSize * MATRIX_H + GAP * (MATRIX_H - 1)) + 'px';
   for(let i=0;i<MATRIX_W*MATRIX_H;i++){
     const d = document.createElement('div');
     d.className = 'led-cell';
-    d.style.width = '100%'; d.style.height = '100%';
+    d.style.width = cellSize + 'px'; d.style.height = cellSize + 'px';
     matrixEl.appendChild(d);
     cells.push(d);
   }
