@@ -7,12 +7,57 @@
     <div id="result"></div>
   </section>
 
+  <section class="panel">
+    <h2>Mappings</h2>
+    <div id="quick-mappings">
+      <label for="mapping-select">Choose mapping:</label>
+      <select id="mapping-select" style="min-width:220px">
+        <option value="">Loading mappings...</option>
+      </select>
+      <button id="mapping-play" style="margin-left:.5rem">Play</button>
+    </div>
+  </section>
+
   <script>
   document.getElementById('sim').addEventListener('click', async () => {
     const card = document.getElementById('card').value;
     const res = await fetch('/simulate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({card_id: card})});
     const j = await res.json();
     document.getElementById('result').innerText = JSON.stringify(j);
+  });
+
+  async function loadQuickMappings(){
+    try{
+      const r = await fetch('/api/mappings');
+      if(!r.ok) return;
+      const j = await r.json();
+      const select = document.getElementById('mapping-select');
+      select.innerHTML = '';
+      const maps = j.mappings || [];
+      if(maps.length === 0){
+        select.appendChild(new Option('No mappings configured', ''));
+        document.getElementById('mapping-play').disabled = true;
+        return;
+      }
+      select.appendChild(new Option('-- select a mapping --', ''));
+      for(const m of maps){
+        const label = (m.name && m.name.length>0)? m.name : (m.id || m.card_id);
+        select.appendChild(new Option(label, m.card_id));
+      }
+      document.getElementById('mapping-play').disabled = false;
+    }catch(e){ console.error('Failed to load mappings', e); }
+  }
+  loadQuickMappings();
+
+  document.getElementById('mapping-play').addEventListener('click', async ()=>{
+    const sel = document.getElementById('mapping-select');
+    const card = sel.value;
+    if(!card){ return alert('Please select a mapping to play'); }
+    try{
+      const resp = await fetch('/simulate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({card_id: card})});
+      if(!resp.ok){ const j = await resp.json().catch(()=>({})); return alert('Failed to trigger mapping: '+(j.error||resp.status)); }
+      showToast('Mapping triggered');
+    }catch(e){ showToast('Failed to trigger mapping'); }
   });
   </script>
 {% endblock %}

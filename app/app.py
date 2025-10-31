@@ -1,8 +1,8 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify, send_from_directory
 from flask import session
-from .player.player import Player
-from .nfc.reader import NFCReader
-from .storage import Storage
+from player.player import Player
+from nfc.reader import NFCReader
+from storage import Storage
 import os
 import json
 try:
@@ -12,9 +12,23 @@ except Exception:
     SocketIO = None
     _HAVE_SOCKETIO = False
 
+try:
+    from flask_talisman import Talisman
+    _HAVE_TALISMAN = True
+except Exception:
+    Talisman = None
+    _HAVE_TALISMAN = False
+
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET', 'dev-secret')
 socketio = SocketIO(app, cors_allowed_origins='*') if _HAVE_SOCKETIO else None
+# Apply Flask-Talisman if available to add secure headers (CSP is disabled by default here)
+try:
+    if _HAVE_TALISMAN and Talisman is not None:
+        # keep a permissive CSP by default to avoid breaking inline scripts/styles in templates
+        Talisman(app, content_security_policy=None)
+except Exception:
+    pass
 data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
 os.makedirs(data_dir, exist_ok=True)
 storage = Storage(os.path.join(data_dir, 'config.json'))
@@ -430,7 +444,7 @@ def settings():
 # create LED matrix mirror (in-memory buffer, hardware-backed when available)
 try:
     # Use new display manager which supports multiple plugin backends.
-    from .hardware.display_manager import create_matrix
+    from hardware.display_manager import create_matrix
     MATRIX_W = int(os.environ.get('LED_WIDTH', '16'))
     MATRIX_H = int(os.environ.get('LED_HEIGHT', '16'))
     # pass storage so the display manager can load active plugin/config from storage
@@ -1500,12 +1514,45 @@ def api_control():
         player.play()
         # Try to trigger animation for current track immediately
         try:
-            _trigger_animation_for_current_track()
+            # If an animation was previously paused, resume it. Otherwise trigger
+            # the mapped animation for the current track.
+            try:
+                if matrix is not None and hasattr(matrix, 'resume_animation'):
+                    matrix.resume_animation()
+                    # resume succeeded (or was a no-op) - ensure mapping restart if nothing running
+                    if not matrix.is_animating():
+                        _trigger_animation_for_current_track()
+                else:
+                    _trigger_animation_for_current_track()
+            except Exception:
+                _trigger_animation_for_current_track()
         except Exception:
             pass
         return jsonify({'ok': True})
     if action == 'pause':
-        player.pause(); return jsonify({'ok': True})
+        player.pause()
+        # Pause any running animation on the matrix so audio pause also
+        # pauses visual playback. Clear duplicate-suppression so resuming
+        # will restart animations as expected.
+        try:
+            if matrix is not None and hasattr(matrix, 'pause_animation'):
+                try:
+                    matrix.pause_animation()
+                except Exception:
+                    # fallback to stopping if pause not supported
+                    try:
+                        matrix.stop_animation()
+                    except Exception:
+                        pass
+            # clear last-animation record so a subsequent play will restart it
+            try:
+                _last_animation['name'] = None
+                _last_animation['started_at'] = 0.0
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return jsonify({'ok': True})
     if action == 'next':
         player.next()
         try:
@@ -1606,10 +1653,35 @@ def api_spotify_select():
 
 
 if __name__ == '__main__':
+    # Determine SSL context: prefer user-provided cert+key via env vars,
+    # otherwise fall back to adhoc TLS if available.
+    ssl_context = None
+    try:
+        cert_path = os.environ.get('SSL_CERT_PATH') or os.environ.get('SSL_CERT')
+        key_path = os.environ.get('SSL_KEY_PATH') or os.environ.get('SSL_KEY')
+        if cert_path and key_path and os.path.exists(cert_path) and os.path.exists(key_path):
+            ssl_context = (cert_path, key_path)
+        else:
+            # try to use adhoc if available (Werkzeug will create a temp cert)
+            ssl_context = 'adhoc'
+    except Exception:
+        ssl_context = None
+
+    # Run server with SSL if possible
     if _HAVE_SOCKETIO and socketio is not None:
-        socketio.run(app, host='0.0.0.0', port=5000)
+        try:
+            if ssl_context:
+                socketio.run(app, host='0.0.0.0', port=5000, ssl_context=ssl_context)
+            else:
+                socketio.run(app, host='0.0.0.0', port=5000)
+        except TypeError:
+            # older socketio may not accept ssl_context param; fall back to plain run
+            socketio.run(app, host='0.0.0.0', port=5000)
     else:
-        app.run(host='0.0.0.0', port=5000)
+        if ssl_context:
+            app.run(host='0.0.0.0', port=5000, ssl_context=ssl_context)
+        else:
+            app.run(host='0.0.0.0', port=5000)
 
 # Background poller to monitor playback changes (Spotify/local) and trigger per-track animations
 def _start_playback_poller(interval_s=2.0):

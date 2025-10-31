@@ -2,14 +2,24 @@
 {% block content %}
   <section class="panel">
   <h2>Now Playing <span id="update-indicator" class="status-init">Initializing...</span></h2>
+    {# derive active matrix size from config so the mini-mirror can match logical pixels #}
+    {% set _disp = config.get('display', {}) if config is defined else {} %}
+    {% set _active = _disp.get('active','ws2812') %}
+    {% set _plugins = _disp.get('plugins', {}) %}
+    {% set _p = _plugins.get(_active, {}) %}
+    {% set MATRIX_W = (_p.get('width') if _p.get('width') is not none else (_p.get('cols') if _p.get('cols') is not none else 16)) %}
+    {% set MATRIX_H = (_p.get('height') if _p.get('height') is not none else (_p.get('rows') if _p.get('rows') is not none else 16)) %}
+
     <div id="np">
-      <div style="display:flex;gap:1rem;align-items:center">
+      <div style="display:flex;gap:1rem;align-items:center;width:100%;">
         <img id="album-art" src="" alt="album art" style="width:120px;height:120px;object-fit:cover;border-radius:8px">
-        <div>
-          <div><strong id="title">-</strong></div>
-          <div id="artist">-</div>
-          <div id="album">-</div>
+        <div style="display:flex;flex-direction:column;flex:1;gap:0.25rem;min-width:0;">
+          <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><strong id="title">-</strong></div>
+          <div id="artist" style="color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">-</div>
+          <div id="album" style="color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">-</div>
         </div>
+        <!-- Small live mirror of the display (right-aligned) -->
+        <canvas id="np-led-canvas" aria-hidden="true" style="image-rendering: pixelated; background:#000; display:block; width:240px; height:240px; border-radius:8px; margin-left:12px; align-self:center;"></canvas>
       </div>
       <div style="margin-top:1rem">
         <button id="prev">⏮</button>
@@ -33,16 +43,7 @@
     </div>
   </section>
 
-  <section class="panel">
-    <h2>Mappings</h2>
-    <div id="quick-mappings">
-      <label for="mapping-select">Choose mapping:</label>
-      <select id="mapping-select" style="min-width:220px">
-        <option value="">Loading mappings...</option>
-      </select>
-      <button id="mapping-play" style="margin-left:.5rem">Play</button>
-    </div>
-  </section>
+  {# Mappings quick selector moved to Simulate page #}
 
   <script>
   // Now Playing logic (moved from now_playing.html)
@@ -132,63 +133,7 @@
     const ok = await setupNowPlayingSocket();
     if(!ok){ setUpdateIndicator('Polling (1s)'); polling = setInterval(fetchNow, 1000); fetchNow(); }
   })();
-  async function loadQuickMappings(){
-    const r = await fetch('/api/mappings');
-    const j = await r.json();
-    const select = document.getElementById('mapping-select');
-    select.innerHTML = '';
-    const maps = j.mappings || [];
-    if(maps.length === 0){
-      select.appendChild(new Option('No mappings configured', ''));
-      document.getElementById('mapping-play').disabled = true;
-      return;
-    }
-    // Add a placeholder option
-    select.appendChild(new Option('-- select a mapping --', ''));
-    for(const m of maps){
-      const label = (m.name && m.name.length>0)? m.name : (m.id || m.card_id);
-      select.appendChild(new Option(label, m.card_id));
-    }
-    document.getElementById('mapping-play').disabled = false;
-  }
-  loadQuickMappings();
-  document.getElementById('mapping-play').addEventListener('click', async ()=>{
-    const sel = document.getElementById('mapping-select');
-    const card = sel.value;
-    if(!card){ return alert('Please select a mapping to play'); }
-    const resp = await fetch('/simulate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({card_id: card})});
-    if(!resp.ok){ const j = await resp.json().catch(()=>({})); return alert('Failed to trigger mapping: '+(j.error||resp.status)); }
-    // After triggering mapping, try to fetch the mapping options and apply them temporarily
-    try{
-      const mapsResp = await fetch('/api/mappings');
-      const mapsJson = await mapsResp.json();
-      const mapping = (mapsJson.mappings||[]).find(x=>x.card_id===card);
-      if(mapping){
-          // Apply mapping options (shuffle/repeat) temporarily
-          await fetch('/api/apply_options', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({shuffle: !!mapping.shuffle, repeat: mapping.repeat || 'off'})});
-          // Update UI toggles
-          setShuffleButton(!!mapping.shuffle);
-          setRepeatButton(mapping.repeat || 'off');
-          showToast(`Applied mapping options — shuffle: ${mapping.shuffle? 'on':'off'}, repeat: ${mapping.repeat||'off'}`);
-          // If mapping provides a volume override, update the volume slider to reflect it without re-sending
-          if(typeof mapping.volume === 'number'){
-            // Update slider to show mapping-applied volume (programmatic change doesn't fire input)
-            volEl.value = mapping.volume;
-            // show small indicator next to slider
-            try{
-              const ind = document.getElementById('volume-indicator');
-              if(ind){
-                ind.style.display = 'inline-block';
-                // clear previous timeout if any
-                if(window._jj_vol_ind_to) clearTimeout(window._jj_vol_ind_to);
-                window._jj_vol_ind_to = setTimeout(()=>{ try{ ind.style.display='none' }catch(e){} }, 3000);
-              }
-            }catch(e){}
-            showToast(`Volume set to ${mapping.volume} by mapping`);
-          }
-        }
-    }catch(e){ /* ignore */ }
-  });
+  // Quick mappings UI moved to the Simulate page.
   // Volume handling: load current volume and send changes
   const volEl = document.getElementById('volume');
   let volTimeout = null;
@@ -262,5 +207,97 @@
   });
   loadOptions();
   // device selection handled on the Spotify settings page; loadDevices removed
+  </script>
+  <script>
+  // Mini mirror for the LED matrix on the Now Playing page
+  const NP_MATRIX_W = {{ MATRIX_W|int }}, NP_MATRIX_H = {{ MATRIX_H|int }};
+  (function(){
+    try{
+      const canvas = document.getElementById('np-led-canvas');
+      if(!canvas) return;
+      const ctx = canvas.getContext('2d');
+      // logical size = matrix native pixels; CSS keeps visual size
+      canvas.width = NP_MATRIX_W;
+      canvas.height = NP_MATRIX_H;
+      // choose a reasonable scale so the canvas fits the CSS box (default 240px)
+      const CSS_BOX = 240; // matches the CSS width/height used in the template
+      const scale = Math.max(1, Math.floor(CSS_BOX / Math.max(NP_MATRIX_W, NP_MATRIX_H)));
+      canvas.style.width = (NP_MATRIX_W * scale) + 'px';
+      canvas.style.height = (NP_MATRIX_H * scale) + 'px';
+      ctx.imageSmoothingEnabled = false;
+      let imageData = ctx.createImageData(NP_MATRIX_W, NP_MATRIX_H);
+
+      function hexToRGBA(hex){
+        if(!hex) return [0,0,0,255];
+        const s = String(hex).replace('#','');
+        if(s.length === 3){
+          const r = parseInt(s[0]+s[0],16); const g = parseInt(s[1]+s[1],16); const b = parseInt(s[2]+s[2],16);
+          return [r,g,b,255];
+        }
+        const r = parseInt(s.substring(0,2),16); const g = parseInt(s.substring(2,4),16); const b = parseInt(s.substring(4,6),16);
+        return [r,g,b,255];
+      }
+
+      function applyNowPixels(pix){
+        try{
+          const num = NP_MATRIX_W * NP_MATRIX_H;
+          const arr = Array.isArray(pix) ? pix : [];
+          for(let i=0;i<num;i++){
+            const c = arr[i] || '#000000';
+            const off = i * 4;
+            const rgba = hexToRGBA(c);
+            imageData.data[off] = rgba[0];
+            imageData.data[off+1] = rgba[1];
+            imageData.data[off+2] = rgba[2];
+            imageData.data[off+3] = 255;
+          }
+          ctx.putImageData(imageData, 0, 0);
+        }catch(e){ /* ignore */ }
+      }
+
+      async function fetchNowDisplay(){
+        try{
+          const r = await fetch('/api/display');
+          if(!r.ok) return;
+          const j = await r.json();
+          applyNowPixels(j.pixels||[]);
+        }catch(e){ }
+      }
+
+      // Try to use Socket.IO; fall back to polling
+      async function setupNPsocket(){
+        try{
+          const r = await fetch('/api/socketio_client');
+          if(r.ok){
+            const j = await r.json();
+            const src = j.cdn || '/socket.io/socket.io.js';
+            await new Promise((resolve,reject)=>{
+              const s = document.createElement('script'); s.src = src; s.async = true;
+              s.onload = ()=>resolve(); s.onerror = ()=>reject(new Error('Failed to load socket.io client'));
+              document.head.appendChild(s);
+            });
+          } else {
+            await new Promise((resolve,reject)=>{
+              const s = document.createElement('script'); s.src = '/socket.io/socket.io.js'; s.async = true;
+              s.onload = ()=>resolve(); s.onerror = ()=>reject(new Error('Failed to load fallback socket.io client'));
+              document.head.appendChild(s);
+            });
+          }
+          if(typeof io === 'undefined') return false;
+          const socket = io();
+          socket.on('connect', ()=>{ try{ setUpdateIndicator('Push (Socket.IO)'); }catch(e){} fetchNowDisplay(); });
+          socket.on('disconnect', ()=>{ try{ setUpdateIndicator('Socket disconnected'); }catch(e){} });
+          socket.on('display_update', (data)=>{ try{ applyNowPixels(data.pixels||[]); }catch(e){} });
+          return true;
+        }catch(e){ return false; }
+      }
+
+      (async function(){
+        const ok = await setupNPsocket();
+        if(!ok){ setUpdateIndicator('Polling (1s)'); setInterval(fetchNowDisplay, 1000); fetchNowDisplay(); }
+      })();
+
+    }catch(e){ /* ignore initialization errors */ }
+  })();
   </script>
 {% endblock %}

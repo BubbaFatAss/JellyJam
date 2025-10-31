@@ -9,9 +9,17 @@ class LocalPlayer:
         self.instance = vlc.Instance()
         self.player = self.instance.media_list_player_new()
         self.media_list = self.instance.media_list_new()
-        # default base music directory relative to repo root
+        # default base music directory: allow override via MUSIC_BASE env var,
+        # otherwise resolve relative to the repository root so behavior is
+        # consistent regardless of the current working directory used to run
+        # the server.
         import os
-        self.base = os.path.abspath(os.path.join(os.getcwd(), 'music'))
+        env_base = os.environ.get('MUSIC_BASE') or os.environ.get('MUSIC_DIR')
+        if env_base:
+            self.base = os.path.abspath(env_base)
+        else:
+            # __file__ is app/player/local_player.py; go up two levels to repo root
+            self.base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'music'))
         # internal state for repeat/shuffle monitoring and control
         self._shuffle = False
         self._repeat_mode = 'off'
@@ -268,58 +276,94 @@ class LocalPlayer:
                     path = path[1:]
                 path = path if os.path.isabs(path) else os.path.abspath(path)
                 image_url = None
-                from mutagen import File as MutagenFile
-                from mutagen.mp3 import MP3
-                from mutagen.flac import FLAC
-                from mutagen.mp4 import MP4
-                from mutagen.id3 import ID3, APIC
-                mf = MutagenFile(path)
-                imgdata = None
-                if mf is not None:
-                    # MP3 with ID3 APIC frames
+                # Compute a stable cache key (SHA1) based on the music file path relative to
+                # the configured music base. If this fails, set h=None and do not attempt
+                # to cache artwork. Only attempt to extract embedded artwork when the
+                # cache is missing or older than the music file.
+                import hashlib
+                try:
                     try:
-                        if isinstance(mf, MP3):
-                            try:
-                                id3 = ID3(path)
-                                apics = id3.getall('APIC')
-                                if apics:
-                                    imgdata = apics[0].data
-                            except Exception:
-                                imgdata = None
-                        # MP4 (m4a) covr atom
-                        elif isinstance(mf, MP4):
-                            covr = mf.tags.get('covr') if mf.tags is not None else None
-                            if covr:
-                                # covr[0] is bytes-like
-                                imgdata = covr[0]
-                        # FLAC pictures
-                        elif isinstance(mf, FLAC):
-                            pics = mf.pictures
-                            if pics:
-                                imgdata = pics[0].data
-                        else:
-                            # Generic fallback: inspect tags for binary data
-                            try:
-                                if mf.tags is not None:
-                                    for v in mf.tags.values():
-                                        if hasattr(v, 'data') and v.data:
-                                            imgdata = v.data
-                                            break
-                            except Exception:
-                                imgdata = None
+                        rel = os.path.relpath(path, getattr(self, 'base', os.path.dirname(path)))
                     except Exception:
-                        imgdata = None
-                if imgdata:
-                    # save to data/artwork with a hash name (so it's not in package static)
-                    import hashlib
-                    h = hashlib.sha1(imgdata).hexdigest()
-                    # data directory is two levels up from this file: app/player -> app -> repo root
-                    data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data'))
-                    art_dir = os.path.join(data_dir, 'artwork')
+                        rel = path
+                    h = hashlib.sha1(rel.replace('\\', '/').encode('utf-8')).hexdigest()
+                except Exception:
+                    h = None
+
+                # Prepare artwork paths if we have a cache key
+                data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data'))
+                art_dir = os.path.join(data_dir, 'artwork')
+                out_path = None
+                write_needed = False
+                if h:
                     try:
                         os.makedirs(art_dir, exist_ok=True)
                         out_path = os.path.join(art_dir, f'{h}.jpg')
-                        if not os.path.exists(out_path):
+                        if os.path.exists(out_path):
+                            try:
+                                music_mtime = os.path.getmtime(path)
+                                art_mtime = os.path.getmtime(out_path)
+                                if music_mtime <= art_mtime:
+                                    # cache is up-to-date; no extraction needed
+                                    image_url = f'/artwork/{h}.jpg'
+                                    write_needed = False
+                                else:
+                                    # cached artwork is older -> we need to extract and overwrite
+                                    write_needed = True
+                            except Exception:
+                                # if we can't stat, do not attempt extraction (conservative)
+                                write_needed = False
+                        else:
+                            # no cached artwork -> extraction needed
+                            write_needed = True
+                    except Exception:
+                        logging.exception('Failed creating artwork directory %s', art_dir)
+                        # If we can't create the directory, treat as no cache
+                        out_path = None
+                        write_needed = False
+
+                # Only attempt embedded extraction when we determined we need to write
+                if write_needed:
+                    # Extract embedded artwork via Mutagen only when necessary
+                    try:
+                        from mutagen import File as MutagenFile
+                        from mutagen.mp3 import MP3
+                        from mutagen.flac import FLAC
+                        from mutagen.mp4 import MP4
+                        from mutagen.id3 import ID3, APIC
+                        mf = MutagenFile(path)
+                        imgdata = None
+                        if mf is not None:
+                            try:
+                                if isinstance(mf, MP3):
+                                    try:
+                                        id3 = ID3(path)
+                                        apics = id3.getall('APIC')
+                                        if apics:
+                                            imgdata = apics[0].data
+                                    except Exception:
+                                        imgdata = None
+                                elif isinstance(mf, MP4):
+                                    covr = mf.tags.get('covr') if mf.tags is not None else None
+                                    if covr:
+                                        imgdata = covr[0]
+                                elif isinstance(mf, FLAC):
+                                    pics = mf.pictures
+                                    if pics:
+                                        imgdata = pics[0].data
+                                else:
+                                    try:
+                                        if mf.tags is not None:
+                                            for v in mf.tags.values():
+                                                if hasattr(v, 'data') and v.data:
+                                                    imgdata = v.data
+                                                    break
+                                    except Exception:
+                                        imgdata = None
+                            except Exception:
+                                imgdata = None
+
+                        if imgdata and h and out_path:
                             try:
                                 with open(out_path, 'wb') as out:
                                     out.write(imgdata)
@@ -329,12 +373,11 @@ class LocalPlayer:
                             else:
                                 image_url = f'/artwork/{h}.jpg'
                         else:
-                            image_url = f'/artwork/{h}.jpg'
+                            # No embedded artwork found or we don't have a cache key
+                            image_url = None
                     except Exception:
-                        logging.exception('Failed creating artwork directory %s', art_dir)
+                        logging.exception('Error extracting artwork for %s', path)
                         image_url = None
-                else:
-                    image_url = None
             except Exception:
                 logging.exception('Error extracting artwork for %s', path if 'path' in locals() else '<unknown>')
                 image_url = None

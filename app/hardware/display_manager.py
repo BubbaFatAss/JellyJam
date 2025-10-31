@@ -43,6 +43,8 @@ class BasePlugin:
         # animation playback state
         self._anim_thread = None
         self._anim_stop = threading.Event()
+        # pause flag: when set, animation runner should wait until cleared
+        self._anim_paused = threading.Event()
         self._anim_lock = threading.Lock()
 
     def set_on_update(self, cb):
@@ -135,8 +137,12 @@ class BasePlugin:
                 if not frames:
                     return
                 self._anim_stop.clear()
+                self._anim_paused.clear()
                 while not self._anim_stop.is_set():
                     for idx, f in enumerate(frames):
+                        # honor pause flag: block here until resumed or stopped
+                        while self._anim_paused.is_set() and not self._anim_stop.is_set():
+                            time.sleep(0.05)
                         if self._anim_stop.is_set():
                             break
                         try:
@@ -163,7 +169,11 @@ class BasePlugin:
                         delay = max(0.01, durations[idx] / max(0.001, float(speed)))
                         waited = 0.0
                         while waited < delay and not self._anim_stop.is_set():
-                            time.sleep(min(0.05, delay - waited))
+                            # also respect pause during frame delay
+                            if self._anim_paused.is_set():
+                                time.sleep(min(0.05, delay - waited))
+                            else:
+                                time.sleep(min(0.05, delay - waited))
                             waited += min(0.05, delay - waited)
                     if not loop:
                         break
@@ -182,6 +192,7 @@ class BasePlugin:
         with self._anim_lock:
             self._anim_thread = t
             self._anim_stop.clear()
+            self._anim_paused.clear()
             t.start()
 
     def play_wled_json(self, path: str, speed: float = 1.0, loop: bool = True):
@@ -234,6 +245,9 @@ class BasePlugin:
                 self._anim_stop.clear()
                 while not self._anim_stop.is_set():
                     for fr in frames:
+                        # honor pause flag
+                        while self._anim_paused.is_set() and not self._anim_stop.is_set():
+                            time.sleep(0.05)
                         if self._anim_stop.is_set():
                             break
                         # each frame may be a list of colors or a dict containing 'pixels' and optional 'duration'
@@ -259,7 +273,10 @@ class BasePlugin:
                         delay = max(0.01, float(duration) / max(0.001, float(speed)))
                         waited = 0.0
                         while waited < delay and not self._anim_stop.is_set():
-                            time.sleep(min(0.05, delay - waited))
+                            if self._anim_paused.is_set():
+                                time.sleep(min(0.05, delay - waited))
+                            else:
+                                time.sleep(min(0.05, delay - waited))
                             waited += min(0.05, delay - waited)
                     if not loop:
                         break
@@ -277,6 +294,7 @@ class BasePlugin:
         with self._anim_lock:
             self._anim_thread = t
             self._anim_stop.clear()
+            self._anim_paused.clear()
             t.start()
 
     def stop_animation(self):
@@ -287,8 +305,32 @@ class BasePlugin:
                     self._anim_thread.join(timeout=2.0)
                     self._anim_thread = None
                     self._anim_stop.clear()
+                    # ensure paused flag is cleared when stopping
+                    try:
+                        self._anim_paused.clear()
+                    except Exception:
+                        pass
         except Exception:
             log.exception('Failed to stop animation')
+
+    def pause_animation(self):
+        """Pause a running animation. The animation thread remains alive but will
+        block until resumed. If no animation is running this is a no-op."""
+        try:
+            with self._anim_lock:
+                if self._anim_thread and self._anim_thread.is_alive():
+                    self._anim_paused.set()
+        except Exception:
+            log.exception('Failed to pause animation')
+
+    def resume_animation(self):
+        """Resume a paused animation. If no animation is paused this is a no-op."""
+        try:
+            with self._anim_lock:
+                if self._anim_thread and self._anim_thread.is_alive():
+                    self._anim_paused.clear()
+        except Exception:
+            log.exception('Failed to resume animation')
 
     def is_animating(self) -> bool:
         try:
@@ -898,6 +940,22 @@ class DisplayManager:
                 return self._plugin.stop_animation()
             except Exception:
                 log.exception('stop_animation failed on plugin')
+
+    def pause_animation(self):
+        if self._plugin:
+            try:
+                if hasattr(self._plugin, 'pause_animation'):
+                    return self._plugin.pause_animation()
+            except Exception:
+                log.exception('pause_animation failed on plugin')
+
+    def resume_animation(self):
+        if self._plugin:
+            try:
+                if hasattr(self._plugin, 'resume_animation'):
+                    return self._plugin.resume_animation()
+            except Exception:
+                log.exception('resume_animation failed on plugin')
 
     def is_animating(self) -> bool:
         if self._plugin:

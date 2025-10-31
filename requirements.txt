@@ -23,3 +23,9 @@ rpi_ws281x>=4.3.0; platform_system=="Linux"
 
 # NFC hardware libraries (optional)
 # nfcpy>=1.0
+
+# Security headers helper (optional)
+flask-talisman>=1.0
+
+# Required for adhoc SSL certificate generation used by Werkzeug/Flask
+cryptography>=3.4
