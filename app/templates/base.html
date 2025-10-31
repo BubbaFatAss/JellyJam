@@ -30,15 +30,18 @@
       </defs>
     </svg>
 
-    <header>
-      <h1>JellyJam NFC Player</h1>
-      <nav>
-  <a href="{{ url_for('index') }}">Now Playing</a>
+    <header style="display:flex;align-items:center;gap:1rem;padding:0.5rem 1rem;">
+      <a href="{{ url_for('index') }}" style="display:inline-flex;align-items:center;text-decoration:none;color:inherit;">
+        <img src="/static/jellyjamlogo.png" alt="JellyJam" style="height:40px;width:auto;display:block;margin-right:0.5rem;border-radius:6px;">
+        <h1 style="margin:0;font-size:1.1rem;">JellyJam NFC Player</h1>
+      </a>
+      <nav style="margin-left:auto;">
+        <a href="{{ url_for('index') }}">Now Playing</a>
         <a href="{{ url_for('display_page') }}">Display</a>
         <a href="{{ url_for('spotify_config') }}">Spotify</a>
         <a href="{{ url_for('mappings') }}">Mappings</a>
-  <a href="{{ url_for('simulate') }}">Simulate</a>
-  <a href="{{ url_for('settings') }}">Settings</a>
+        <a href="{{ url_for('simulate') }}">Simulate</a>
+        <a href="{{ url_for('settings') }}">Settings</a>
       </nav>
     </header>
     <main>
