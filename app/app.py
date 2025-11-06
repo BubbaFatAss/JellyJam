@@ -788,12 +788,18 @@ def mappings():
                 volume = v
             except Exception:
                 volume = None
+        # optional resume position checkbox
+        resume_position = True if form.get('resume_position') in ('on', 'true', '1') else False
         # preserve existing per-track animations when editing an existing mapping
         prev = mappings.get(card, {})
         preserved = prev.get('animations') if isinstance(prev, dict) else None
-        new_map = {'type': map_type, 'id': playlist_id, 'shuffle': shuffle, 'repeat': repeat_mode, 'volume': volume}
+        # preserve saved_state if resume_position is enabled
+        saved_state = prev.get('saved_state') if resume_position and isinstance(prev, dict) else None
+        new_map = {'type': map_type, 'id': playlist_id, 'shuffle': shuffle, 'repeat': repeat_mode, 'volume': volume, 'resume_position': resume_position}
         if preserved:
             new_map['animations'] = preserved
+        if saved_state:
+            new_map['saved_state'] = saved_state
         mappings[card] = new_map
         cfg['mappings'] = mappings
         storage.save(cfg)
@@ -1345,7 +1351,15 @@ def api_mappings():
     # For local mappings, try to provide friendly names using local base
     result = []
     for card, m in mappings.items():
-        entry = {'card_id': card, 'type': m.get('type'), 'id': m.get('id'), 'shuffle': bool(m.get('shuffle')), 'repeat': m.get('repeat', 'off'), 'volume': m.get('volume')}
+        entry = {
+            'card_id': card,
+            'type': m.get('type'),
+            'id': m.get('id'),
+            'shuffle': bool(m.get('shuffle')),
+            'repeat': m.get('repeat', 'off'),
+            'volume': m.get('volume'),
+            'resume_position': bool(m.get('resume_position', False))
+        }
         if m.get('type') == 'local':
             try:
                 base = player.local.base

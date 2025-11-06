@@ -14,6 +14,10 @@
         <select id="playlist-select" name="playlist_select"><option>Loading...</option></select>
       </label>
       <label id="playlist-manual" style="display:none"><input id="manual-path" name="manual_path" placeholder="Playlist URI or ID"></label>
+      <label style="display:flex;align-items:center;gap:0.5rem;">
+        <input type="checkbox" id="resume-position-input" name="resume_position">
+        <span>Resume from saved position <small style="color:#666;">(saves playback position on pause/stop)</small></span>
+      </label>
       <div class="form-actions">
           <button type="submit" id="add-btn">Add Mapping</button>
         </div>
@@ -33,11 +37,12 @@
             <th style="text-align:center;padding:0.5rem;">Shuffle</th>
             <th style="text-align:center;padding:0.5rem;">Repeat</th>
             <th style="text-align:center;padding:0.5rem;">Volume</th>
+            <th style="text-align:center;padding:0.5rem;">Resume</th>
             <th style="text-align:right;padding:0.5rem;">Actions</th>
           </tr>
         </thead>
         <tbody id="mappings-list">
-          <tr><td colspan="7" style="text-align:center;padding:1rem;">Loading…</td></tr>
+          <tr><td colspan="8" style="text-align:center;padding:1rem;">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -115,7 +120,7 @@
         if(list.length===0){ 
           const tr = document.createElement('tr');
           const td = document.createElement('td');
-          td.setAttribute('colspan', '7');
+          td.setAttribute('colspan', '8');
           td.style.textAlign = 'center';
           td.style.padding = '1rem';
           td.innerText = 'No mappings yet';
@@ -175,6 +180,14 @@
           tdVolume.style.textAlign = 'center';
           tdVolume.innerText = m.volume != null ? m.volume : '—';
           tr.appendChild(tdVolume);
+          
+          // Resume column
+          const tdResume = document.createElement('td');
+          tdResume.style.padding = '0.5rem';
+          tdResume.style.textAlign = 'center';
+          tdResume.innerText = m.resume_position ? '✓' : '—';
+          tdResume.title = m.resume_position ? 'Will resume from saved position' : 'No resume';
+          tr.appendChild(tdResume);
           
           // Actions column
           const tdActions = document.createElement('td');
@@ -282,6 +295,12 @@
         }
         if(volVal !== null) fd.append('volume', volVal);
       }
+      
+      // resume position
+      const resumeEl = document.getElementById('resume-position-input');
+      if(resumeEl && resumeEl.checked){
+        fd.append('resume_position', '1');
+      }
 
       // submit via fetch
       try{
@@ -304,7 +323,7 @@
       const editRow = document.createElement('tr');
       editRow.className = 'edit-row';
       const editCell = document.createElement('td');
-      editCell.setAttribute('colspan', '7');
+      editCell.setAttribute('colspan', '8');
       editCell.style.padding = '1rem';
       editCell.style.backgroundColor = '#f9fafb';
       
@@ -320,6 +339,10 @@
         <label>Volume override (0-100, blank = no override)
           <input name="volume" placeholder="e.g. 75" value="${mapping.volume!=null?mapping.volume:''}">
           <small class="help"></small>
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;">
+          <input type="checkbox" name="resume_position" ${mapping.resume_position? 'checked':''}>
+          <span>Resume from saved position <small style="color:#666;">(saves on pause/stop)</small></span>
         </label>
         <div><span class="edit-error" style="color:#b91c1c;display:none;margin-right:1rem"></span><button type="submit">Save</button> <button type="button" class="cancel-edit">Cancel</button></div>
       `;

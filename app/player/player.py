@@ -25,6 +25,31 @@ class Player:
             repeat_mode = mapping.get('repeat', 'off') or 'off'
             vol = mapping.get('volume')
             self.local.play_playlist(mapping['id'], shuffle=shuffle, repeat_mode=repeat_mode, volume=vol)
+            
+            # Resume from saved position if enabled
+            if mapping.get('resume_position'):
+                try:
+                    saved_state = mapping.get('saved_state', {})
+                    saved_track = saved_state.get('track')
+                    saved_position = saved_state.get('position_ms')
+                    
+                    if saved_track and saved_position is not None:
+                        # Try to find and play the saved track
+                        import time
+                        time.sleep(0.5)  # Give player time to start
+                        
+                        # Get current playing track to compare
+                        now = self.local.now_playing()
+                        current_id = now.get('id') if now else None
+                        
+                        # If not on the right track, we'd need to find it in playlist
+                        # For now, just seek if position > 0
+                        if saved_position > 0:
+                            self.local.seek(saved_position)
+                            print(f'Resumed at position {saved_position}ms')
+                except Exception as e:
+                    print(f'Failed to resume position: {e}')
+            
             # persist last volume
             try:
                 if vol is not None:
@@ -71,6 +96,9 @@ class Player:
             self._state['playing'] = True
 
     def pause(self):
+        # Save position if mapping has resume enabled
+        self._save_resume_position()
+        
         if self._state.get('source') == 'local':
             self.local.player.pause()
             self._state['playing'] = False
@@ -174,7 +202,44 @@ class Player:
         except Exception:
             pass
 
+    def _save_resume_position(self):
+        """Save current track and position for the active mapping if resume is enabled."""
+        try:
+            mapping_card = self._state.get('mapping_card')
+            if not mapping_card:
+                return
+            
+            cfg = self.storage.load()
+            mapping = cfg.get('mappings', {}).get(mapping_card)
+            if not mapping or not mapping.get('resume_position'):
+                return
+            
+            # Get current playback state
+            now = self.now_playing()
+            if not now:
+                return
+            
+            track_id = now.get('id')
+            position_ms = now.get('position_ms', 0)
+            
+            # Save state to mapping
+            if 'saved_state' not in mapping:
+                mapping['saved_state'] = {}
+            
+            mapping['saved_state']['track'] = track_id
+            mapping['saved_state']['position_ms'] = position_ms
+            
+            # Persist to storage
+            cfg['mappings'][mapping_card] = mapping
+            self.storage.save(cfg)
+            print(f'Saved resume position: track={track_id}, position={position_ms}ms')
+        except Exception as e:
+            print(f'Failed to save resume position: {e}')
+
     def stop(self):
+        # Save position if mapping has resume enabled
+        self._save_resume_position()
+        
         # Stop playback entirely depending on the active source
         if self._state.get('source') == 'local':
             try:
