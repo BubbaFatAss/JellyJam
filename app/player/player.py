@@ -24,9 +24,10 @@ class Player:
             shuffle = bool(mapping.get('shuffle'))
             repeat_mode = mapping.get('repeat', 'off') or 'off'
             vol = mapping.get('volume')
-            self.local.play_playlist(mapping['id'], shuffle=shuffle, repeat_mode=repeat_mode, volume=vol)
             
-            # Resume from saved position if enabled
+            # Check if we should resume from saved position
+            resume_track = None
+            resume_position_ms = None
             if mapping.get('resume_position'):
                 try:
                     saved_state = mapping.get('saved_state', {})
@@ -34,21 +35,21 @@ class Player:
                     saved_position = saved_state.get('position_ms')
                     
                     if saved_track and saved_position is not None:
-                        # Try to find and play the saved track
-                        import time
-                        time.sleep(0.5)  # Give player time to start
-                        
-                        # Get current playing track to compare
-                        now = self.local.now_playing()
-                        current_id = now.get('id') if now else None
-                        
-                        # If not on the right track, we'd need to find it in playlist
-                        # For now, just seek if position > 0
-                        if saved_position > 0:
-                            self.local.seek(saved_position)
-                            print(f'Resumed at position {saved_position}ms')
+                        resume_track = saved_track
+                        resume_position_ms = saved_position
+                        print(f'Will resume at track={saved_track}, position={saved_position}ms')
                 except Exception as e:
-                    print(f'Failed to resume position: {e}')
+                    print(f'Failed to prepare resume: {e}')
+            
+            # Start playlist with optional resume parameters
+            self.local.play_playlist(
+                mapping['id'],
+                shuffle=shuffle,
+                repeat_mode=repeat_mode,
+                volume=vol,
+                resume_track=resume_track,
+                resume_position_ms=resume_position_ms
+            )
             
             # persist last volume
             try:

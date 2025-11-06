@@ -45,8 +45,10 @@ class LocalPlayer:
         self.media_list = self.instance.media_list_new()
         self.player.set_media_list(self.media_list)
 
-    def play_playlist(self, playlist_id, shuffle=False, repeat_mode='off', volume=None):
+    def play_playlist(self, playlist_id, shuffle=False, repeat_mode='off', volume=None, resume_track=None, resume_position_ms=None):
         # playlist_id may be a directory path or an m3u file
+        # resume_track: absolute path to the track to start from
+        # resume_position_ms: position in milliseconds to seek to after starting
         # If something is currently playing, stop it first to ensure a clean transition
         try:
             with self._monitor_lock:
@@ -136,6 +138,21 @@ class LocalPlayer:
                 random.shuffle(files)
         except Exception:
             pass
+        
+        # If resuming from a specific track, find its index before adding to media list
+        start_index = 0
+        if resume_track and files:
+            try:
+                # Normalize paths for comparison
+                resume_path = os.path.normpath(resume_track)
+                for i, file_path in enumerate(files):
+                    if os.path.normpath(file_path) == resume_path:
+                        start_index = i
+                        print(f'Found resume track at index {i}')
+                        break
+            except Exception:
+                logging.exception('Failed to find resume track')
+        
         # add files to media list
         for path in files:
             try:
@@ -239,7 +256,30 @@ class LocalPlayer:
         except Exception:
             logging.exception('Failed to attach end event')
 
-        self.player.play()
+        # Start playback at the appropriate index (determined earlier)
+        if start_index > 0:
+            try:
+                self.player.play_item_at_index(start_index)
+            except Exception:
+                logging.exception('Failed to play from index, using default')
+                # Fallback: just play from beginning
+                self.player.play()
+        else:
+            self.player.play()
+
+        # If resuming to a specific position, seek after a brief delay
+        if resume_position_ms is not None and resume_position_ms > 0:
+            import threading, time
+            def _delayed_seek():
+                time.sleep(0.3)  # Brief delay for player to initialize
+                try:
+                    mp = self.player.get_media_player()
+                    if mp:
+                        mp.set_time(int(resume_position_ms))
+                        logging.info(f'Resumed at position {resume_position_ms}ms')
+                except Exception:
+                    logging.exception('Failed to seek to resume position')
+            threading.Thread(target=_delayed_seek, daemon=True).start()
 
         # apply optional volume override if provided (retry logic inside set_volume)
         if volume is not None:
