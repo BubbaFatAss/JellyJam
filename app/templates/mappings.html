@@ -23,9 +23,24 @@
       </form>
 
     <h3>Existing mappings</h3>
-    <ul id="mappings-list">
-      <li>Loading…</li>
-    </ul>
+    <div style="overflow-x:auto;">
+      <table id="mappings-table" style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="border-bottom:2px solid #ddd;">
+            <th style="text-align:left;padding:0.5rem;">Card ID</th>
+            <th style="text-align:left;padding:0.5rem;">Type</th>
+            <th style="text-align:left;padding:0.5rem;">Playlist</th>
+            <th style="text-align:center;padding:0.5rem;">Shuffle</th>
+            <th style="text-align:center;padding:0.5rem;">Repeat</th>
+            <th style="text-align:center;padding:0.5rem;">Volume</th>
+            <th style="text-align:right;padding:0.5rem;">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="mappings-list">
+          <tr><td colspan="7" style="text-align:center;padding:1rem;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
   </section>
   <script>
   (function(){
@@ -94,28 +109,136 @@
       try{
         const res = await fetch('/api/mappings');
         const j = await res.json();
-        const ul = document.getElementById('mappings-list');
-        ul.innerHTML = '';
+        const tbody = document.getElementById('mappings-list');
+        tbody.innerHTML = '';
         const list = j.mappings || [];
-        if(list.length===0){ ul.appendChild(document.createElement('li')).innerText='No mappings yet'; return; }
+        if(list.length===0){ 
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.setAttribute('colspan', '7');
+          td.style.textAlign = 'center';
+          td.style.padding = '1rem';
+          td.innerText = 'No mappings yet';
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          return;
+        }
         for(const m of list){
-          const li = document.createElement('li');
-          li.setAttribute('data-card-id', m.card_id);
-          const strong = document.createElement('strong'); strong.innerText = m.card_id;
-          const spanType = document.createElement('span'); spanType.className='map-type'; spanType.innerText = m.type;
-          const spanId = document.createElement('span'); spanId.className='map-id'; spanId.innerText = m.id;
-          const spanOpts = document.createElement('span'); spanOpts.className='map-options';
-          spanOpts.innerText = `[Shuffle: ${m.shuffle? 'yes':'no'}, Repeat: ${m.repeat && m.repeat !== 'off' ? 'yes':'no'}${m.volume!=null ? ', Volume: '+m.volume : ''}]`;
-          const editBtn = document.createElement('button'); editBtn.className='edit-mapping small'; editBtn.innerText='Edit';
-          editBtn.addEventListener('click', ()=>{ openInlineEditor(li, m); });
-          const animBtn = document.createElement('button'); animBtn.className='edit-animations small'; animBtn.style.marginLeft='0.5rem'; animBtn.innerText='Animations';
-          animBtn.addEventListener('click', ()=>{ openAnimationsEditor(li, m); });
-          const delForm = document.createElement('form'); delForm.method='post'; delForm.action='{{ url_for("mappings_delete") }}'; delForm.style.display='inline'; delForm.style.marginLeft='1rem';
-          const hid = document.createElement('input'); hid.type='hidden'; hid.name='card_id'; hid.value = m.card_id; delForm.appendChild(hid);
-          const delBtn = document.createElement('button'); delBtn.type='submit'; delBtn.className='small'; delBtn.innerText='Delete'; delForm.appendChild(delBtn);
-          delForm.addEventListener('submit', (ev)=>{ if(!confirm('Delete this mapping?')) ev.preventDefault(); });
-          li.appendChild(strong); li.appendChild(document.createTextNode(' → ')); li.appendChild(spanType); li.appendChild(document.createTextNode(' : ')); li.appendChild(spanId); li.appendChild(spanOpts); li.appendChild(editBtn); li.appendChild(animBtn); li.appendChild(delForm);
-          ul.appendChild(li);
+          const tr = document.createElement('tr');
+          tr.setAttribute('data-card-id', m.card_id);
+          tr.style.borderBottom = '1px solid #eee';
+          
+          // Card ID column
+          const tdCard = document.createElement('td');
+          tdCard.style.padding = '0.5rem';
+          const strong = document.createElement('strong');
+          strong.innerText = m.card_id;
+          tdCard.appendChild(strong);
+          tr.appendChild(tdCard);
+          
+          // Type column
+          const tdType = document.createElement('td');
+          tdType.style.padding = '0.5rem';
+          const spanType = document.createElement('span');
+          spanType.className = 'map-type';
+          spanType.innerText = m.type;
+          tdType.appendChild(spanType);
+          tr.appendChild(tdType);
+          
+          // Playlist column
+          const tdPlaylist = document.createElement('td');
+          tdPlaylist.style.padding = '0.5rem';
+          const spanId = document.createElement('span');
+          spanId.className = 'map-id';
+          spanId.innerText = m.name || m.id;
+          spanId.title = m.id;  // Show full path on hover
+          tdPlaylist.appendChild(spanId);
+          tr.appendChild(tdPlaylist);
+          
+          // Shuffle column
+          const tdShuffle = document.createElement('td');
+          tdShuffle.style.padding = '0.5rem';
+          tdShuffle.style.textAlign = 'center';
+          tdShuffle.innerText = m.shuffle ? '✓' : '—';
+          tr.appendChild(tdShuffle);
+          
+          // Repeat column
+          const tdRepeat = document.createElement('td');
+          tdRepeat.style.padding = '0.5rem';
+          tdRepeat.style.textAlign = 'center';
+          tdRepeat.innerText = (m.repeat && m.repeat !== 'off') ? '✓' : '—';
+          tr.appendChild(tdRepeat);
+          
+          // Volume column
+          const tdVolume = document.createElement('td');
+          tdVolume.style.padding = '0.5rem';
+          tdVolume.style.textAlign = 'center';
+          tdVolume.innerText = m.volume != null ? m.volume : '—';
+          tr.appendChild(tdVolume);
+          
+          // Actions column
+          const tdActions = document.createElement('td');
+          tdActions.style.padding = '0.5rem';
+          tdActions.style.textAlign = 'right';
+          tdActions.style.whiteSpace = 'nowrap';
+          
+          const editBtn = document.createElement('button');
+          editBtn.className = 'edit-mapping small';
+          editBtn.innerHTML = '✏️';
+          editBtn.title = 'Edit mapping';
+          editBtn.style.padding = '0.25rem 0.5rem';
+          editBtn.style.border = 'none';
+          editBtn.style.background = 'transparent';
+          editBtn.style.cursor = 'pointer';
+          editBtn.style.fontSize = '1.2em';
+          editBtn.addEventListener('click', ()=>{ openInlineEditor(tr, m); });
+          
+          const animBtn = document.createElement('button');
+          animBtn.className = 'edit-animations small';
+          animBtn.style.marginLeft = '0.25rem';
+          animBtn.innerHTML = '🎬';
+          animBtn.title = 'Edit animations';
+          animBtn.style.padding = '0.25rem 0.5rem';
+          animBtn.style.border = 'none';
+          animBtn.style.background = 'transparent';
+          animBtn.style.cursor = 'pointer';
+          animBtn.style.fontSize = '1.2em';
+          animBtn.addEventListener('click', ()=>{ openAnimationsEditor(tr, m); });
+          
+          const delForm = document.createElement('form');
+          delForm.method = 'post';
+          delForm.action = '{{ url_for("mappings_delete") }}';
+          delForm.style.display = 'inline';
+          delForm.style.marginLeft = '0.25rem';
+          
+          const hid = document.createElement('input');
+          hid.type = 'hidden';
+          hid.name = 'card_id';
+          hid.value = m.card_id;
+          delForm.appendChild(hid);
+          
+          const delBtn = document.createElement('button');
+          delBtn.type = 'submit';
+          delBtn.className = 'small danger';
+          delBtn.innerHTML = '🗑️';
+          delBtn.title = 'Delete mapping';
+          delBtn.style.padding = '0.25rem 0.5rem';
+          delBtn.style.border = 'none';
+          delBtn.style.background = 'transparent';
+          delBtn.style.cursor = 'pointer';
+          delBtn.style.fontSize = '1.2em';
+          delForm.appendChild(delBtn);
+          
+          delForm.addEventListener('submit', (ev)=>{
+            if(!confirm('Delete this mapping?')) ev.preventDefault();
+          });
+          
+          tdActions.appendChild(editBtn);
+          tdActions.appendChild(animBtn);
+          tdActions.appendChild(delForm);
+          tr.appendChild(tdActions);
+          
+          tbody.appendChild(tr);
         }
       }catch(err){ console.error('Failed to refresh mappings',err); }
     }
@@ -177,8 +300,17 @@
     });
 
     // Inline editor with playlist wiring
-    function openInlineEditor(li, mapping){
-      const form = document.createElement('form'); form.style.marginTop='0.5rem';
+    function openInlineEditor(tr, mapping){
+      const editRow = document.createElement('tr');
+      editRow.className = 'edit-row';
+      const editCell = document.createElement('td');
+      editCell.setAttribute('colspan', '7');
+      editCell.style.padding = '1rem';
+      editCell.style.backgroundColor = '#f9fafb';
+      
+      const form = document.createElement('form');
+      form.style.display = 'grid';
+      form.style.gap = '0.5rem';
       form.innerHTML = `
         <input type="hidden" name="card_id" value="${mapping.card_id}">
         <label>Type <select name="type"><option value="local">Local</option><option value="spotify">Spotify</option></select></label>
@@ -191,8 +323,11 @@
         </label>
         <div><span class="edit-error" style="color:#b91c1c;display:none;margin-right:1rem"></span><button type="submit">Save</button> <button type="button" class="cancel-edit">Cancel</button></div>
       `;
-      li.style.display='none';
-      li.parentNode.insertBefore(form, li.nextSibling);
+      
+      editCell.appendChild(form);
+      editRow.appendChild(editCell);
+      tr.style.display = 'none';
+      tr.parentNode.insertBefore(editRow, tr.nextSibling);
 
       const playlistSelect = form.querySelector('.inline-playlist');
       const playlistManual = form.querySelector('.inline-manual');
@@ -218,7 +353,7 @@
         }
       })();
 
-      form.querySelector('.cancel-edit').addEventListener('click', ()=>{ form.remove(); li.style.display='block'; });
+      form.querySelector('.cancel-edit').addEventListener('click', ()=>{ editRow.remove(); tr.style.display=''; });
 
       form.addEventListener('submit', async (ev)=>{
         ev.preventDefault();
@@ -241,13 +376,13 @@
         if(volInput){ const v = validateVolumeValue(volInput.value); if(Number.isNaN(v)){ errEl.innerText='Volume must be an integer 0-100'; errEl.style.display='inline-block'; return; } if(v!==null) volInput.value = v; }
         try{
           const res = await fetch('{{ url_for("mappings") }}', { method: 'POST', headers: {'X-Requested-With':'XMLHttpRequest'}, body: fd });
-          if(res.ok){ showToast('Mapping saved',2000); form.remove(); await refreshMappingsList(); } else { const txt = await res.text(); errEl.innerText='Save failed: '+res.status; errEl.style.display='inline-block'; }
+          if(res.ok){ showToast('Mapping saved',2000); editRow.remove(); await refreshMappingsList(); } else { const txt = await res.text(); errEl.innerText='Save failed: '+res.status; errEl.style.display='inline-block'; }
         }catch(err){ console.error(err); errEl.innerText='Network error'; errEl.style.display='inline-block'; }
       });
     }
 
     // Animations editor: associate an animation file with individual tracks in the mapping
-    async function openAnimationsEditor(li, mapping){
+    async function openAnimationsEditor(tr, mapping){
       // fetch tracks, animations and existing associations
       const card = mapping.card_id;
       const tracksResp = await fetch(`/api/mappings/${encodeURIComponent(card)}/tracks`);
@@ -313,10 +448,18 @@
       const saveBtn = document.createElement('button'); saveBtn.innerText='Save';
       const cancelBtn = document.createElement('button'); cancelBtn.innerText='Cancel'; cancelBtn.style.marginLeft='0.5rem';
       btnBar.appendChild(saveBtn); btnBar.appendChild(cancelBtn); panel.appendChild(btnBar);
-      // insert after li
-      li.style.display='none'; li.parentNode.insertBefore(panel, li.nextSibling);
+      
+      // insert after table row
+      const animRow = document.createElement('tr');
+      const animCell = document.createElement('td');
+      animCell.setAttribute('colspan', '7');
+      animCell.style.padding = '0';
+      animCell.appendChild(panel);
+      animRow.appendChild(animCell);
+      tr.style.display='none';
+      tr.parentNode.insertBefore(animRow, tr.nextSibling);
 
-      cancelBtn.addEventListener('click', ()=>{ panel.remove(); li.style.display='block'; });
+      cancelBtn.addEventListener('click', ()=>{ animRow.remove(); tr.style.display=''; });
 
       saveBtn.addEventListener('click', async ()=>{
         // collect associations
@@ -335,7 +478,7 @@
         }
         try{
           const r = await fetch(`/api/mappings/${encodeURIComponent(card)}/animations`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({associations}) });
-          if(r.ok){ showToast('Animations saved',2000); panel.remove(); await refreshMappingsList(); } else { alert('Save failed'); }
+          if(r.ok){ showToast('Animations saved',2000); animRow.remove(); await refreshMappingsList(); } else { alert('Save failed'); }
         }catch(err){ console.error(err); alert('Network error'); }
       });
     }

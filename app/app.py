@@ -882,14 +882,41 @@ def api_playlists():
     # Convert to friendly relative names when possible
     friendly = []
     import os
-    base = player.local.base
+    music_base = player.local.base
+    # Calculate audiobooks base path (same logic as in local_player.py)
+    audiobooks_base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'audiobooks'))
+    
     for p in pls:
         try:
-            rel = os.path.relpath(p, base)
+            # For m3u files, use the filename without extension as the friendly name
+            if p.lower().endswith('.m3u'):
+                name = os.path.splitext(os.path.basename(p))[0]
+            else:
+                # For directories, try to get relative path from either music or audiobooks base
+                name = None
+                # Try music base first
+                try:
+                    if p.startswith(music_base):
+                        name = os.path.relpath(p, music_base)
+                except Exception:
+                    pass
+                # If that didn't work, try audiobooks base
+                if name is None:
+                    try:
+                        if p.startswith(audiobooks_base):
+                            name = os.path.relpath(p, audiobooks_base)
+                    except Exception:
+                        pass
+                # Fall back to the full path if neither worked
+                if name is None:
+                    name = p
+            
+            friendly.append({'path': p, 'name': name})
         except Exception:
-            rel = p
-        friendly.append({'path': p, 'name': rel})
-    return jsonify({'playlists': friendly, 'music_base': base})
+            # If anything fails, use the full path
+            friendly.append({'path': p, 'name': p})
+    
+    return jsonify({'playlists': friendly, 'music_base': music_base})
 
 
 @app.route('/display')

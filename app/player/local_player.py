@@ -449,17 +449,58 @@ class LocalPlayer:
             return None
 
     def list_playlists(self):
-        """Return list of available playlists under the base music directory.
-        Directories and .m3u files are considered playlists.
+        """Return list of available playlists under the base music directory and audiobooks directory.
+        Directories and .m3u files are considered playlists. If a directory contains .m3u files
+        (recursively), those playlist files are added instead of the directory itself.
         Returns list of absolute paths."""
         import os
         results = []
-        if not os.path.isdir(self.base):
-            return results
-        for entry in sorted(os.listdir(self.base)):
-            path = os.path.join(self.base, entry)
-            if os.path.isdir(path) or (os.path.isfile(path) and entry.lower().endswith('.m3u')):
-                results.append(path)
+        
+        def _find_m3u_files(directory):
+            """Recursively find all .m3u files in a directory."""
+            m3u_files = []
+            try:
+                for root, dirs, files in os.walk(directory):
+                    for file in files:
+                        if file.lower().endswith('.m3u'):
+                            m3u_files.append(os.path.join(root, file))
+            except Exception:
+                pass
+            return m3u_files
+        
+        def _process_directory(base_dir):
+            """Process a directory and add playlists or directories to results."""
+            if not os.path.isdir(base_dir):
+                return
+            
+            for entry in sorted(os.listdir(base_dir)):
+                path = os.path.join(base_dir, entry)
+                
+                if os.path.isfile(path) and entry.lower().endswith('.m3u'):
+                    # Add m3u files directly
+                    results.append(path)
+                elif os.path.isdir(path):
+                    # Check if directory contains any m3u files recursively
+                    m3u_files = _find_m3u_files(path)
+                    if m3u_files:
+                        # Add the m3u files instead of the directory
+                        results.extend(sorted(m3u_files))
+                    else:
+                        # No m3u files found, add the directory itself
+                        results.append(path)
+        
+        # Search in base music directory
+        _process_directory(self.base)
+        
+        # Also search in audiobooks directory
+        try:
+            # __file__ is app/player/local_player.py; audiobooks is at repo root
+            audiobooks_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'audiobooks'))
+            _process_directory(audiobooks_dir)
+        except Exception:
+            # If audiobooks directory doesn't exist or can't be accessed, just skip it
+            pass
+        
         return results
 
     def get_playlist_items(self, playlist_id):
