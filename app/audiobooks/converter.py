@@ -17,6 +17,23 @@ log = logging.getLogger(__name__)
 # Track conversion jobs
 _conversion_jobs = {}
 _conversion_lock = threading.Lock()
+_socketio = None  # Will be set by set_socketio()
+
+
+def set_socketio(socketio_instance):
+    """Set the Socket.IO instance for emitting job status updates."""
+    global _socketio
+    _socketio = socketio_instance
+
+
+def _emit_jobs_update():
+    """Emit current job list to all connected Socket.IO clients."""
+    if _socketio:
+        try:
+            jobs = list_jobs()
+            _socketio.emit('audible_jobs_update', {'jobs': jobs})
+        except Exception as e:
+            log.warning('Failed to emit jobs update: %s', e)
 
 
 class ConversionJob:
@@ -142,6 +159,8 @@ def convert_aax_to_m4b(
             def _run():
                 try:
                     job.status = 'running'
+                    _emit_jobs_update()  # Notify clients job started
+                    
                     result = subprocess.run(
                         cmd,
                         capture_output=True,
@@ -150,9 +169,20 @@ def convert_aax_to_m4b(
                     )
                     
                     if result.returncode == 0:
-                        # Find output file (AAXtoMP3_Python names it based on title)
-                        # Look for .m4b files in output_dir
-                        m4b_files = list(Path(output_dir).glob('*.m4b'))
+                        # Parse output directory from stdout
+                        # AAXtoMP3_Python outputs: "Output Directory: /path/to/output"
+                        actual_output_dir = None
+                        for line in result.stdout.splitlines():
+                            if line.startswith('Output Directory:'):
+                                actual_output_dir = line.split('Output Directory:', 1)[1].strip()
+                                break
+                        
+                        if not actual_output_dir:
+                            # Fallback to original output_dir if not found in stdout
+                            actual_output_dir = output_dir
+                        
+                        # Look for .m4b files in the actual output directory
+                        m4b_files = list(Path(actual_output_dir).glob('*.m4b'))
                         if m4b_files:
                             job.output_file = str(m4b_files[0])
                             job.status = 'completed'
@@ -166,6 +196,13 @@ def convert_aax_to_m4b(
                                     log.info('Removing temporary input file: %s', input_file)
                                     input_path.unlink()
                                 
+                                # Also remove .aaxc.old.* files that match the input filename
+                                parent_dir = input_path.parent
+                                old_pattern = f"{input_path.name}.old.*"
+                                for old_file in parent_dir.glob(old_pattern):
+                                    log.info('Removing old temporary file: %s', old_file)
+                                    old_file.unlink()
+                                
                                 # Also remove associated .voucher file if it exists
                                 voucher_path = input_path.with_suffix('.voucher')
                                 if voucher_path.exists():
@@ -173,23 +210,70 @@ def convert_aax_to_m4b(
                                     voucher_path.unlink()
                             except Exception as cleanup_err:
                                 log.warning('Failed to clean up temporary files: %s', cleanup_err)
+                            
+                            # Emit socketio event for successful completion
+                            if _socketio:
+                                _socketio.emit('conversion_complete', {
+                                    'job_id': job.job_id,
+                                    'status': 'completed',
+                                    'output_file': job.output_file
+                                })
+                            _emit_jobs_update()  # Notify clients of updated job status
                         else:
                             job.status = 'failed'
-                            job.error = 'No M4B output found after conversion'
+                            job.error = f'No M4B output found in {actual_output_dir}'
+                            
+                            # Emit socketio event for failure
+                            if _socketio:
+                                _socketio.emit('conversion_complete', {
+                                    'job_id': job.job_id,
+                                    'status': 'failed',
+                                    'error': job.error
+                                })
+                            _emit_jobs_update()  # Notify clients of updated job status
                     else:
                         job.status = 'failed'
                         job.error = f'Conversion failed: {result.stderr}'
                         log.error('Conversion failed: %s', result.stderr)
+                        
+                        # Emit socketio event for failure
+                        if _socketio:
+                            _socketio.emit('conversion_complete', {
+                                'job_id': job.job_id,
+                                'status': 'failed',
+                                'error': job.error
+                            })
+                        _emit_jobs_update()  # Notify clients of updated job status
                 except subprocess.TimeoutExpired:
                     job.status = 'failed'
                     job.error = 'Conversion timed out (> 2 hours)'
+                    
+                    # Emit socketio event for timeout
+                    if _socketio:
+                        _socketio.emit('conversion_complete', {
+                            'job_id': job.job_id,
+                            'status': 'failed',
+                            'error': job.error
+                        })
+                    _emit_jobs_update()  # Notify clients of updated job status
                 except Exception as e:
                     job.status = 'failed'
                     job.error = str(e)
                     log.exception('Conversion failed')
+                    
+                    # Emit socketio event for exception
+                    if _socketio:
+                        _socketio.emit('conversion_complete', {
+                            'job_id': job.job_id,
+                            'status': 'failed',
+                            'error': job.error
+                        })
+                    _emit_jobs_update()  # Notify clients of updated job status
             
             job.thread = threading.Thread(target=_run, daemon=True)
             job.thread.start()
+            
+            _emit_jobs_update()  # Notify clients of new job
             
             return {'success': True, 'job_id': job_id, 'status': 'running'}
         else:
@@ -202,8 +286,20 @@ def convert_aax_to_m4b(
             )
             
             if result.returncode == 0:
-                # Find output
-                m4b_files = list(Path(output_dir).glob('*.m4b'))
+                # Parse output directory from stdout
+                # AAXtoMP3_Python outputs: "Output Directory: /path/to/output"
+                actual_output_dir = None
+                for line in result.stdout.splitlines():
+                    if line.startswith('Output Directory:'):
+                        actual_output_dir = line.split('Output Directory:', 1)[1].strip()
+                        break
+                
+                if not actual_output_dir:
+                    # Fallback to original output_dir if not found in stdout
+                    actual_output_dir = output_dir
+                
+                # Look for .m4b files in the actual output directory
+                m4b_files = list(Path(actual_output_dir).glob('*.m4b'))
                 if m4b_files:
                     output_file = str(m4b_files[0])
                     log.info('Conversion completed: %s', output_file)
@@ -215,6 +311,13 @@ def convert_aax_to_m4b(
                             log.info('Removing temporary input file: %s', input_file)
                             input_path.unlink()
                         
+                        # Also remove .aaxc.old.* files that match the input filename
+                        parent_dir = input_path.parent
+                        old_pattern = f"{input_path.name}.old.*"
+                        for old_file in parent_dir.glob(old_pattern):
+                            log.info('Removing old temporary file: %s', old_file)
+                            old_file.unlink()
+                        
                         # Also remove associated .voucher file if it exists
                         voucher_path = input_path.with_suffix('.voucher')
                         if voucher_path.exists():
@@ -225,7 +328,7 @@ def convert_aax_to_m4b(
                     
                     return {'success': True, 'output': output_file}
                 else:
-                    return {'success': False, 'error': 'No M4B output found after conversion'}
+                    return {'success': False, 'error': f'No M4B output found in {actual_output_dir}'}
             else:
                 log.error('Conversion failed: %s', result.stderr)
                 return {'success': False, 'error': result.stderr}

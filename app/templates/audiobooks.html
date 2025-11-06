@@ -360,11 +360,133 @@
 
     document.getElementById('refresh-jobs').addEventListener('click', loadJobs);
 
-    // Auto-refresh jobs every 5 seconds
-    setInterval(loadJobs, 5000);
+    // Auto-refresh jobs every 5 seconds (fallback if Socket.IO not available)
+    let pollInterval = setInterval(loadJobs, 5000);
 
     // Initialize
     checkAuthStatus();
     loadJobs();
+
+    // Setup Socket.IO for real-time conversion updates
+    async function setupSocketIO() {
+      try {
+        const r = await fetch('/api/socketio_client');
+        const j = await r.json();
+        
+        // Load Socket.IO client
+        await new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          const src = j.cdn || '/socket.io/socket.io.js';
+          s.src = src;
+          s.onload = resolve;
+          s.onerror = () => {
+            // Try fallback
+            const fallback = document.createElement('script');
+            fallback.src = '/socket.io/socket.io.js';
+            fallback.onload = resolve;
+            fallback.onerror = () => reject(new Error('Failed to load socket.io client'));
+            document.head.appendChild(fallback);
+          };
+          document.head.appendChild(s);
+        });
+        
+        // Connect and listen for events
+        if (typeof io !== 'undefined') {
+          const socket = io();
+          
+          socket.on('connect', () => {
+            console.log('Socket.IO connected - subscribing to audiobook jobs');
+            // Stop polling since we have real-time updates
+            clearInterval(pollInterval);
+            // Subscribe to job updates
+            socket.emit('subscribe_audible_jobs');
+          });
+          
+          socket.on('disconnect', () => {
+            console.log('Socket.IO disconnected - falling back to polling');
+            // Resume polling if disconnected
+            pollInterval = setInterval(loadJobs, 5000);
+          });
+          
+          // Listen for job list updates
+          socket.on('audible_jobs_update', (data) => {
+            if (data.error) {
+              console.error('Jobs update error:', data.error);
+              return;
+            }
+            
+            const jobs = data.jobs || [];
+            const listEl = document.getElementById('jobs-list');
+            listEl.innerHTML = '';
+            
+            if (jobs.length === 0) {
+              listEl.innerHTML = '<p style="color:#999;">No conversion jobs</p>';
+              return;
+            }
+            
+            jobs.forEach(job => {
+              const item = document.createElement('div');
+              item.className = 'job-item';
+              
+              const status = document.createElement('div');
+              status.className = 'job-status ' + job.status;
+              status.innerText = 'Status: ' + job.status.toUpperCase();
+              
+              const input = document.createElement('div');
+              input.style.fontSize = '0.9rem';
+              input.innerText = 'Input: ' + job.input_path;
+              
+              const progress = document.createElement('div');
+              progress.className = 'progress-bar';
+              const progressFill = document.createElement('div');
+              progressFill.className = 'progress-bar-fill';
+              progressFill.style.width = (job.progress || 0) + '%';
+              progress.appendChild(progressFill);
+              
+              item.appendChild(status);
+              item.appendChild(input);
+              
+              if (job.status === 'running' || job.status === 'pending') {
+                item.appendChild(progress);
+              }
+              
+              if (job.status === 'completed' && job.output_file) {
+                const output = document.createElement('div');
+                output.style.fontSize = '0.9rem';
+                output.style.color = '#28a745';
+                output.innerText = '✓ Output: ' + job.output_file;
+                item.appendChild(output);
+              }
+              
+              if (job.status === 'failed' && job.error) {
+                const error = document.createElement('div');
+                error.style.fontSize = '0.9rem';
+                error.style.color = '#dc3545';
+                error.innerText = '✗ Error: ' + job.error;
+                item.appendChild(error);
+              }
+              
+              listEl.appendChild(item);
+            });
+          });
+          
+          socket.on('conversion_complete', (data) => {
+            console.log('Conversion complete:', data);
+            
+            // Show toast notification
+            if (data.status === 'completed') {
+              showToast('✓ Conversion completed successfully!', 5000);
+            } else if (data.status === 'failed') {
+              const errorMsg = data.error || 'Unknown error';
+              showToast('✗ Conversion failed: ' + errorMsg, 7000);
+            }
+          });
+        }
+      } catch(e) {
+        console.warn('Socket.IO setup failed, falling back to polling:', e);
+      }
+    }
+    
+    setupSocketIO();
   </script>
 {% endblock %}

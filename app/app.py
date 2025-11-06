@@ -1317,6 +1317,26 @@ if _HAVE_SOCKETIO:
         except Exception:
             pass
 
+    @socketio.on('subscribe_audible_jobs')
+    def _ws_subscribe_audible_jobs():
+        """Subscribe to audiobook conversion job updates."""
+        try:
+            from audiobooks import converter
+            jobs = converter.list_jobs()
+            socketio.emit('audible_jobs_update', {'jobs': jobs})
+        except Exception as e:
+            socketio.emit('audible_jobs_update', {'error': str(e)})
+
+    @socketio.on('get_audible_jobs')
+    def _ws_get_audible_jobs():
+        """Get current audiobook conversion jobs via Socket.IO."""
+        try:
+            from audiobooks import converter
+            jobs = converter.list_jobs()
+            socketio.emit('audible_jobs_update', {'jobs': jobs})
+        except Exception as e:
+            socketio.emit('audible_jobs_update', {'error': str(e)})
+
 
 @app.route('/api/mappings')
 def api_mappings():
@@ -1690,8 +1710,11 @@ try:
     # Initialize Audible client
     audible_client = AudibleClient()
     
+    # Set socketio instance for converter to emit events
+    converter.set_socketio(socketio)
+    
     # Ensure audiobooks output directory exists
-    audiobooks_dir = os.path.join(os.path.dirname(__file__), '..', 'audiobooks')
+    audiobooks_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'audiobooks'))
     os.makedirs(audiobooks_dir, exist_ok=True)
     
     # Temp directory for AAXC downloads before conversion
