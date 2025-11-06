@@ -1652,6 +1652,191 @@ def api_spotify_select():
     return jsonify({'ok': True})
 
 
+# ============================================================================
+# Audiobooks routes
+# ============================================================================
+try:
+    from audiobooks.audible_client import AudibleClient
+    from audiobooks import converter
+    import uuid
+    
+    # Initialize Audible client
+    audible_client = AudibleClient()
+    
+    # Ensure audiobooks output directory exists
+    audiobooks_dir = os.path.join(os.path.dirname(__file__), '..', 'audiobooks')
+    os.makedirs(audiobooks_dir, exist_ok=True)
+    
+    # Temp directory for AAXC downloads before conversion
+    temp_downloads_dir = os.path.join(data_dir, 'audiobooks_temp')
+    os.makedirs(temp_downloads_dir, exist_ok=True)
+    
+    @app.route('/audiobooks')
+    def audiobooks_page():
+        """Audiobooks management page."""
+        return render_template('audiobooks.html', config=storage.load())
+    
+    @app.route('/api/audible/auth/status')
+    def api_audible_auth_status():
+        """Check if Audible is authenticated."""
+        authenticated = audible_client.is_authenticated()
+        needs_reauth = audible_client.needs_reauthentication()
+        return jsonify({
+            'authenticated': authenticated,
+            'needs_reauthentication': needs_reauth
+        })
+    
+    @app.route('/api/audible/auth/login', methods=['POST'])
+    def api_audible_auth_login():
+        """Authenticate with Audible."""
+        try:
+            username = request.json.get('username')
+            password = request.json.get('password')
+            country_code = request.json.get('country_code', 'us')
+            otp_code = request.json.get('otp_code')  # Optional 2FA code
+            
+            if not username or not password:
+                return jsonify({'success': False, 'error': 'Username and password required'}), 400
+            
+            result = audible_client.authenticate(username, password, country_code, otp_code)
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    
+    @app.route('/api/audible/auth/logout', methods=['POST'])
+    def api_audible_auth_logout():
+        """Log out from Audible."""
+        try:
+            audible_client.logout()
+            return jsonify({'success': True})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    
+    @app.route('/api/audible/library')
+    def api_audible_library():
+        """Fetch Audible library."""
+        try:
+            page = int(request.args.get('page', 1))
+            num_results = int(request.args.get('num_results', 50))
+            
+            result = audible_client.get_library(page=page, num_results=num_results)
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/api/audible/download', methods=['POST'])
+    def api_audible_download():
+        """Download and convert an audiobook."""
+        try:
+            asin = request.json.get('asin')
+            auto_convert = request.json.get('auto_convert', True)
+            
+            if not asin:
+                return jsonify({'success': False, 'error': 'ASIN required'}), 400
+            
+            # Download AAXC file
+            download_result = audible_client.download_audiobook(
+                asin=asin,
+                output_dir=temp_downloads_dir
+            )
+            
+            if not download_result.get('success'):
+                return jsonify(download_result), 500
+            
+            aaxc_path = download_result['path']
+            
+            if auto_convert:
+                # Start async conversion job
+                job_id = str(uuid.uuid4())
+                activation_bytes = audible_client.get_activation_bytes()
+                
+                converter.convert_aax_to_m4b(
+                    input_file=aaxc_path,
+                    output_dir=audiobooks_dir,
+                    activation_bytes=activation_bytes,
+                    job_id=job_id
+                )
+                
+                return jsonify({
+                    'success': True,
+                    'asin': asin,
+                    'download_path': aaxc_path,
+                    'job_id': job_id,
+                    'status': 'converting'
+                })
+            else:
+                return jsonify({
+                    'success': True,
+                    'asin': asin,
+                    'download_path': aaxc_path,
+                    'status': 'downloaded'
+                })
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    
+    @app.route('/api/audible/convert', methods=['POST'])
+    def api_audible_convert():
+        """Convert a downloaded AAXC file to M4B."""
+        try:
+            input_file = request.json.get('input_file')
+            
+            if not input_file or not os.path.exists(input_file):
+                return jsonify({'success': False, 'error': 'Valid input file required'}), 400
+            
+            job_id = str(uuid.uuid4())
+            activation_bytes = audible_client.get_activation_bytes()
+            
+            converter.convert_aax_to_m4b(
+                input_file=input_file,
+                output_dir=audiobooks_dir,
+                activation_bytes=activation_bytes,
+                job_id=job_id
+            )
+            
+            return jsonify({
+                'success': True,
+                'job_id': job_id,
+                'status': 'converting'
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    
+    @app.route('/api/audible/jobs')
+    def api_audible_jobs():
+        """List all conversion jobs."""
+        try:
+            jobs = converter.list_jobs()
+            return jsonify({'jobs': jobs})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/api/audible/jobs/<job_id>')
+    def api_audible_job_status(job_id):
+        """Get status of a specific conversion job."""
+        try:
+            status = converter.get_job_status(job_id)
+            if status:
+                return jsonify(status)
+            else:
+                return jsonify({'error': 'Job not found'}), 404
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/api/audible/jobs/<job_id>/cancel', methods=['POST'])
+    def api_audible_job_cancel(job_id):
+        """Cancel a conversion job."""
+        try:
+            success = converter.cancel_job(job_id)
+            return jsonify({'success': success})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+except Exception:
+    # Audiobooks module not available; routes will not be registered
+    import logging
+    logging.exception('Audiobooks module failed to load; audiobooks features disabled')
+
+
 if __name__ == '__main__':
     # Determine SSL context: prefer user-provided cert+key via env vars,
     # otherwise fall back to adhoc TLS if available.

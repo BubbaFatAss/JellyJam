@@ -17,6 +17,13 @@ Pillow>=9.0
 # Metadata for local audio
 mutagen>=1.45
 
+# Audible audiobook download and conversion
+audible>=0.8.2
+audible-cli>=0.2.0
+# AAXtoMP3_Python conversion tool dependencies (will be vendored/submodule)
+# ffmpeg (system dependency), pycryptodome for decryption
+pycryptodome>=3.15
+
 # Optional hardware packages (install on Raspberry Pi when needed)
 # WS281x library for controlling SK6812/WS2812 LED strips (Linux/RPi only)
 rpi_ws281x>=4.3.0; platform_system=="Linux"

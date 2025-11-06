@@ -1,0 +1,370 @@
+{% extends 'base.html' %}
+{% block content %}
+  <section class="panel">
+    <h2>Audiobooks</h2>
+    <p>Download and convert Audible audiobooks to M4B format.</p>
+
+    <!-- Authentication Section -->
+    <div id="auth-section" style="margin-bottom:2rem;">
+      <h3>Audible Authentication</h3>
+      <div id="auth-status" style="margin-bottom:1rem;">
+        <span id="auth-status-text">Checking authentication...</span>
+      </div>
+      
+      <div id="login-form" style="display:none;">
+        <form id="audible-login" style="display:flex;flex-direction:column;gap:0.5rem;max-width:400px;">
+          <label for="audible-username">Email/Username</label>
+          <input id="audible-username" type="text" required>
+          
+          <label for="audible-password">Password</label>
+          <input id="audible-password" type="password" required>
+          
+          <label for="audible-country">Country Code</label>
+          <select id="audible-country">
+            <option value="us">United States (us)</option>
+            <option value="uk">United Kingdom (uk)</option>
+            <option value="de">Germany (de)</option>
+            <option value="fr">France (fr)</option>
+            <option value="ca">Canada (ca)</option>
+            <option value="au">Australia (au)</option>
+            <option value="in">India (in)</option>
+            <option value="jp">Japan (jp)</option>
+          </select>
+          
+          <div id="otp-section" style="display:none;margin-top:0.5rem;">
+            <label for="audible-otp">Two-Factor Authentication Code</label>
+            <input id="audible-otp" type="text" placeholder="Enter 6-digit code" maxlength="6" pattern="[0-9]{6}">
+          </div>
+          
+          <button type="submit" style="margin-top:0.5rem;">Login to Audible</button>
+        </form>
+      </div>
+      
+      <div id="logout-section" style="display:none;">
+        <button id="logout-btn">Logout</button>
+      </div>
+    </div>
+
+    <!-- Library Browser -->
+    <div id="library-section" style="display:none;margin-bottom:2rem;">
+      <h3>Your Audible Library</h3>
+      <button id="refresh-library" style="margin-bottom:1rem;">Refresh Library</button>
+      
+      <div id="library-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:1rem;"></div>
+      
+      <div id="library-pagination" style="margin-top:1rem;display:flex;gap:0.5rem;align-items:center;">
+        <button id="prev-page">Previous</button>
+        <span id="page-info">Page 1</span>
+        <button id="next-page">Next</button>
+      </div>
+    </div>
+
+    <!-- Conversion Jobs -->
+    <div id="jobs-section" style="margin-bottom:2rem;">
+      <h3>Conversion Jobs</h3>
+      <button id="refresh-jobs" style="margin-bottom:1rem;">Refresh Jobs</button>
+      <div id="jobs-list"></div>
+    </div>
+  </section>
+
+  <style>
+    .book-card {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .book-card img {
+      width: 100%;
+      height: auto;
+      border-radius: 4px;
+    }
+    .book-card h4 {
+      margin: 0;
+      font-size: 1rem;
+    }
+    .book-card .authors {
+      font-size: 0.9rem;
+      color: #666;
+    }
+    .book-card .runtime {
+      font-size: 0.85rem;
+      color: #999;
+    }
+    .book-card button {
+      margin-top: 0.5rem;
+    }
+    .job-item {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 0.75rem;
+      margin-bottom: 0.5rem;
+    }
+    .job-item .job-status {
+      font-weight: bold;
+    }
+    .job-item .job-status.pending { color: #999; }
+    .job-item .job-status.running { color: #1f8ceb; }
+    .job-item .job-status.completed { color: #28a745; }
+    .job-item .job-status.failed { color: #dc3545; }
+    .job-item .progress-bar {
+      width: 100%;
+      height: 20px;
+      background: #f0f0f0;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 0.5rem;
+    }
+    .job-item .progress-bar-fill {
+      height: 100%;
+      background: #1f8ceb;
+      transition: width 0.3s;
+    }
+  </style>
+
+  <script>
+    let currentPage = 1;
+    let totalPages = 1;
+    let isAuthenticated = false;
+
+    async function checkAuthStatus() {
+      try {
+        const r = await fetch('/api/audible/auth/status');
+        const j = await r.json();
+        isAuthenticated = j.authenticated || false;
+        const needsReauth = j.needs_reauthentication || false;
+        
+        if (isAuthenticated) {
+          document.getElementById('auth-status-text').innerText = '✓ Authenticated';
+          document.getElementById('login-form').style.display = 'none';
+          document.getElementById('logout-section').style.display = 'block';
+          document.getElementById('library-section').style.display = 'block';
+          loadLibrary();
+        } else {
+          if (needsReauth) {
+            document.getElementById('auth-status-text').innerText = '⚠ Authentication expired - please log in again';
+            showToast('Authentication expired. Please log in again.', 5000);
+          } else {
+            document.getElementById('auth-status-text').innerText = '✗ Not authenticated';
+          }
+          document.getElementById('login-form').style.display = 'block';
+          document.getElementById('logout-section').style.display = 'none';
+          document.getElementById('library-section').style.display = 'none';
+        }
+      } catch(e) {
+        document.getElementById('auth-status-text').innerText = 'Error checking auth status';
+      }
+    }
+
+    document.getElementById('audible-login').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('audible-username').value;
+      const password = document.getElementById('audible-password').value;
+      const country_code = document.getElementById('audible-country').value;
+      const otp_code = document.getElementById('audible-otp').value || null;
+      
+      try {
+        showToast('Authenticating with Audible...');
+        const r = await fetch('/api/audible/auth/login', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({username, password, country_code, otp_code})
+        });
+        const j = await r.json();
+        
+        if (j.success) {
+          showToast('Authentication successful!');
+          document.getElementById('audible-password').value = '';
+          document.getElementById('audible-otp').value = '';
+          document.getElementById('otp-section').style.display = 'none';
+          checkAuthStatus();
+        } else if (j.requires_otp) {
+          // Show OTP field if 2FA is required
+          showToast('Two-factor authentication required. Please enter your code.', 5000);
+          document.getElementById('otp-section').style.display = 'block';
+          document.getElementById('audible-otp').focus();
+        } else {
+          showToast('Authentication failed: ' + (j.error || 'Unknown error'), 5000);
+          // Hide OTP field on error
+          document.getElementById('otp-section').style.display = 'none';
+          document.getElementById('audible-otp').value = '';
+        }
+      } catch(e) {
+        showToast('Authentication failed: ' + e.message, 5000);
+      }
+    });
+
+    document.getElementById('logout-btn').addEventListener('click', async () => {
+      try {
+        await fetch('/api/audible/auth/logout', {method: 'POST'});
+        showToast('Logged out');
+        checkAuthStatus();
+      } catch(e) {
+        showToast('Logout failed: ' + e.message);
+      }
+    });
+
+    async function loadLibrary(page = 1) {
+      if (!isAuthenticated) return;
+      
+      try {
+        const r = await fetch(`/api/audible/library?page=${page}&num_results=20`);
+        const j = await r.json();
+        
+        if (j.error) {
+          showToast('Failed to load library: ' + j.error, 5000);
+          return;
+        }
+        
+        const items = j.items || [];
+        const total = j.total || 0;
+        currentPage = j.page || page;
+        totalPages = Math.ceil(total / 20);
+        
+        const listEl = document.getElementById('library-list');
+        listEl.innerHTML = '';
+        
+        items.forEach(book => {
+          const card = document.createElement('div');
+          card.className = 'book-card';
+          
+          const img = document.createElement('img');
+          img.src = book.cover_url || '/static/placeholder_artwork.svg';
+          img.alt = book.title;
+          
+          const title = document.createElement('h4');
+          title.innerText = book.title || 'Unknown Title';
+          
+          const authors = document.createElement('div');
+          authors.className = 'authors';
+          authors.innerText = (book.authors || []).join(', ') || 'Unknown Author';
+          
+          const runtime = document.createElement('div');
+          runtime.className = 'runtime';
+          const hours = Math.floor((book.runtime_minutes || 0) / 60);
+          const minutes = (book.runtime_minutes || 0) % 60;
+          runtime.innerText = `${hours}h ${minutes}m`;
+          
+          const downloadBtn = document.createElement('button');
+          downloadBtn.innerText = 'Download & Convert';
+          downloadBtn.addEventListener('click', async () => {
+            try {
+              showToast('Starting download for ' + book.title + '...');
+              const dr = await fetch('/api/audible/download', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({asin: book.asin, auto_convert: true})
+              });
+              const dj = await dr.json();
+              
+              if (dj.success) {
+                showToast('Download started! Conversion job ID: ' + dj.job_id);
+                loadJobs();
+              } else {
+                showToast('Download failed: ' + (dj.error || 'Unknown error'), 5000);
+              }
+            } catch(e) {
+              showToast('Download failed: ' + e.message, 5000);
+            }
+          });
+          
+          card.appendChild(img);
+          card.appendChild(title);
+          card.appendChild(authors);
+          card.appendChild(runtime);
+          card.appendChild(downloadBtn);
+          
+          listEl.appendChild(card);
+        });
+        
+        document.getElementById('page-info').innerText = `Page ${currentPage} of ${totalPages}`;
+        document.getElementById('prev-page').disabled = currentPage <= 1;
+        document.getElementById('next-page').disabled = currentPage >= totalPages;
+      } catch(e) {
+        showToast('Failed to load library: ' + e.message, 5000);
+      }
+    }
+
+    document.getElementById('refresh-library').addEventListener('click', () => loadLibrary(currentPage));
+    document.getElementById('prev-page').addEventListener('click', () => loadLibrary(currentPage - 1));
+    document.getElementById('next-page').addEventListener('click', () => loadLibrary(currentPage + 1));
+
+    async function loadJobs() {
+      try {
+        const r = await fetch('/api/audible/jobs');
+        const j = await r.json();
+        
+        if (j.error) {
+          return;
+        }
+        
+        const jobs = j.jobs || [];
+        const listEl = document.getElementById('jobs-list');
+        listEl.innerHTML = '';
+        
+        if (jobs.length === 0) {
+          listEl.innerHTML = '<p style="color:#999;">No conversion jobs</p>';
+          return;
+        }
+        
+        jobs.forEach(job => {
+          const item = document.createElement('div');
+          item.className = 'job-item';
+          
+          const status = document.createElement('div');
+          status.className = 'job-status ' + job.status;
+          status.innerText = 'Status: ' + job.status.toUpperCase();
+          
+          const input = document.createElement('div');
+          input.style.fontSize = '0.9rem';
+          input.innerText = 'Input: ' + job.input_path;
+          
+          const progress = document.createElement('div');
+          progress.className = 'progress-bar';
+          const progressFill = document.createElement('div');
+          progressFill.className = 'progress-bar-fill';
+          progressFill.style.width = (job.progress || 0) + '%';
+          progress.appendChild(progressFill);
+          
+          item.appendChild(status);
+          item.appendChild(input);
+          
+          if (job.status === 'running' || job.status === 'pending') {
+            item.appendChild(progress);
+          }
+          
+          if (job.status === 'completed' && job.output_file) {
+            const output = document.createElement('div');
+            output.style.fontSize = '0.9rem';
+            output.style.color = '#28a745';
+            output.innerText = '✓ Output: ' + job.output_file;
+            item.appendChild(output);
+          }
+          
+          if (job.status === 'failed' && job.error) {
+            const error = document.createElement('div');
+            error.style.fontSize = '0.9rem';
+            error.style.color = '#dc3545';
+            error.innerText = '✗ Error: ' + job.error;
+            item.appendChild(error);
+          }
+          
+          listEl.appendChild(item);
+        });
+      } catch(e) {
+        console.error('Failed to load jobs:', e);
+      }
+    }
+
+    document.getElementById('refresh-jobs').addEventListener('click', loadJobs);
+
+    // Auto-refresh jobs every 5 seconds
+    setInterval(loadJobs, 5000);
+
+    // Initialize
+    checkAuthStatus();
+    loadJobs();
+  </script>
+{% endblock %}
