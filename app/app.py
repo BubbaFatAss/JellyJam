@@ -441,6 +441,52 @@ def settings():
         plugins_json = '{}'
     return render_template('settings.html', display_cfg=disp, saved=saved_flag, plugins_json=plugins_json)
 
+@app.route('/api/artwork/info', methods=['GET'])
+def artwork_info():
+    """Get information about the artwork cache."""
+    try:
+        artwork_dir = os.path.join(data_dir, 'artwork')
+        if not os.path.exists(artwork_dir):
+            return jsonify({'file_count': 0, 'total_size_mb': 0})
+        
+        file_count = 0
+        total_size = 0
+        
+        for root, dirs, files in os.walk(artwork_dir):
+            for file in files:
+                file_path = os.path.join(root, file)
+                try:
+                    total_size += os.path.getsize(file_path)
+                    file_count += 1
+                except Exception:
+                    pass
+        
+        total_size_mb = total_size / (1024 * 1024)  # Convert to MB
+        return jsonify({
+            'file_count': file_count,
+            'total_size_mb': total_size_mb
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/artwork/clear', methods=['POST'])
+def clear_artwork_cache():
+    """Clear all cached artwork files."""
+    try:
+        import shutil
+        artwork_dir = os.path.join(data_dir, 'artwork')
+        
+        if os.path.exists(artwork_dir):
+            # Remove all files in the artwork directory
+            shutil.rmtree(artwork_dir)
+            # Recreate the empty directory
+            os.makedirs(artwork_dir, exist_ok=True)
+            return jsonify({'success': True, 'message': 'Artwork cache cleared'})
+        else:
+            return jsonify({'success': True, 'message': 'No artwork cache to clear'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # create LED matrix mirror (in-memory buffer, hardware-backed when available)
 try:
     # Use new display manager which supports multiple plugin backends.

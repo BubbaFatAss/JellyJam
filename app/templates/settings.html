@@ -1,12 +1,22 @@
 {% extends 'base.html' %}
 {% block title %}Settings{% endblock %}
 {% block content %}
-<h2>Display Settings</h2>
-<form method="post">
-  <div class="settings-tabs" style="margin-bottom:1rem;">
-    <button type="button" id="tab-basic" class="tab-btn">Basic</button>
-    <button type="button" id="tab-advanced" class="tab-btn">Advanced</button>
-  </div>
+<h2>Settings</h2>
+
+<!-- Main Settings Tabs -->
+<div class="settings-tabs" style="margin-bottom:1.5rem;">
+  <button type="button" id="main-tab-display" class="tab-btn active">Display</button>
+  <button type="button" id="main-tab-artwork" class="tab-btn">Artwork</button>
+</div>
+
+<!-- Display Tab -->
+<div id="display-tab-content">
+  <h3>Display Settings</h3>
+  <form method="post">
+    <div class="settings-tabs" style="margin-bottom:1rem;">
+      <button type="button" id="tab-basic" class="tab-btn">Basic</button>
+      <button type="button" id="tab-advanced" class="tab-btn">Advanced</button>
+    </div>
 
   <div id="basic-tab">
     <div>
@@ -83,8 +93,99 @@
     <a href="{{ url_for('index') }}">Cancel</a>
   </div>
 </form>
+</div>
+
+<!-- Artwork Tab -->
+<div id="artwork-tab-content" style="display:none;">
+  <h3>Artwork Cache</h3>
+  <p style="margin-bottom:1rem;color:#666;">
+    JellyJam caches album artwork locally to improve performance. You can clear the cache if you're experiencing issues or want to free up disk space.
+  </p>
+  
+  <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:1.5rem;margin-bottom:1rem;">
+    <h4 style="margin-top:0;margin-bottom:0.5rem;">Cache Information</h4>
+    <p style="margin:0;color:#666;font-size:0.9rem;" id="artwork-info">Loading...</p>
+  </div>
+  
+  <button type="button" id="clear-artwork-btn" class="btn-danger" style="background:#ef4444;color:white;padding:10px 20px;border:none;border-radius:6px;cursor:pointer;font-weight:500;">
+    Clear Artwork Cache
+  </button>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function(){
+  // Main tab switching (Display vs Artwork)
+  const mainTabDisplay = document.getElementById('main-tab-display');
+  const mainTabArtwork = document.getElementById('main-tab-artwork');
+  const displayTabContent = document.getElementById('display-tab-content');
+  const artworkTabContent = document.getElementById('artwork-tab-content');
+  
+  function showMainTab(tab) {
+    if (tab === 'artwork') {
+      displayTabContent.style.display = 'none';
+      artworkTabContent.style.display = '';
+      mainTabDisplay.classList.remove('active');
+      mainTabArtwork.classList.add('active');
+      loadArtworkInfo();
+    } else {
+      displayTabContent.style.display = '';
+      artworkTabContent.style.display = 'none';
+      mainTabDisplay.classList.add('active');
+      mainTabArtwork.classList.remove('active');
+    }
+  }
+  
+  mainTabDisplay.addEventListener('click', () => showMainTab('display'));
+  mainTabArtwork.addEventListener('click', () => showMainTab('artwork'));
+  
+  // Load artwork cache info
+  function loadArtworkInfo() {
+    fetch('/api/artwork/info')
+      .then(r => r.json())
+      .then(data => {
+        const info = document.getElementById('artwork-info');
+        if (data.error) {
+          info.textContent = 'Error loading cache info';
+        } else {
+          const size = data.total_size_mb ? data.total_size_mb.toFixed(2) + ' MB' : '0 MB';
+          info.textContent = `${data.file_count || 0} files • ${size}`;
+        }
+      })
+      .catch(e => {
+        document.getElementById('artwork-info').textContent = 'Error loading cache info';
+      });
+  }
+  
+  // Clear artwork cache
+  document.getElementById('clear-artwork-btn').addEventListener('click', function() {
+    if (!confirm('Are you sure you want to clear the artwork cache? This will delete all cached album artwork and cannot be undone.')) {
+      return;
+    }
+    
+    const btn = this;
+    btn.disabled = true;
+    btn.textContent = 'Clearing...';
+    
+    fetch('/api/artwork/clear', { method: 'POST' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          showToast('Artwork cache cleared successfully', 3000);
+          loadArtworkInfo();
+        } else {
+          showToast('Error clearing cache: ' + (data.error || 'Unknown error'), 5000);
+        }
+      })
+      .catch(e => {
+        showToast('Error clearing cache', 5000);
+      })
+      .finally(() => {
+        btn.disabled = false;
+        btn.textContent = 'Clear Artwork Cache';
+      });
+  });
+
+  // Display settings tab switching (Basic vs Advanced)
   const select = document.getElementById('active');
   const wsSectionEl = document.getElementById('ws-section');
   const rgbSectionEl = document.getElementById('rgb-section');
