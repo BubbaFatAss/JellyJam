@@ -81,8 +81,11 @@ class SpotifyPlayer:
             # re-raise or return None
             raise
 
-    def play_playlist(self, playlist_uri):
+    def play_playlist(self, playlist_uri, resume_track_uri=None, resume_position_ms=None):
         # Use helper which handles token refresh
+        # resume_track_uri: Spotify track URI to start from
+        # resume_position_ms: position in milliseconds to seek to
+        print(f'play_playlist called with: playlist={playlist_uri}, resume_track={resume_track_uri}, resume_pos={resume_position_ms}')
         devices = self._call_spotify('devices')
         if not devices or not devices.get('devices'):
             print('No active spotify devices found. Start a device (librespot or official client)')
@@ -91,7 +94,35 @@ class SpotifyPlayer:
         selected = cfg.get('spotify_selected_device')
         active_ids = [d['id'] for d in devices['devices']]
         device_id = selected if (selected and selected in active_ids) else devices['devices'][0]['id']
-        self._call_spotify('start_playback', device_id=device_id, context_uri=playlist_uri)
+        
+        # If resuming from a specific track, start playback with offset
+        if resume_track_uri:
+            try:
+                # Ensure resume_track_uri is in the correct format (spotify:track:...)
+                # If it's just an ID, convert it to a URI
+                if resume_track_uri and not resume_track_uri.startswith('spotify:'):
+                    resume_track_uri = f"spotify:track:{resume_track_uri}"
+                    print(f'Converted track ID to URI: {resume_track_uri}')
+                
+                # Start playback at the specific track within the playlist
+                self._call_spotify('start_playback', device_id=device_id, context_uri=playlist_uri, offset={'uri': resume_track_uri})
+                
+                # If also resuming to a specific position, seek after a brief delay
+                if resume_position_ms is not None and resume_position_ms > 0:
+                    import threading, time
+                    def _delayed_seek():
+                        time.sleep(0.5)  # Wait for Spotify to start the track
+                        try:
+                            self._call_spotify('seek_track', int(resume_position_ms), device_id=device_id)
+                            print(f'Resumed Spotify at position {resume_position_ms}ms')
+                        except Exception as e:
+                            print(f'Failed to seek to resume position: {e}')
+                    threading.Thread(target=_delayed_seek, daemon=True).start()
+            except Exception as e:
+                print(f'Failed to resume from specific track, starting from beginning: {e}')
+                self._call_spotify('start_playback', device_id=device_id, context_uri=playlist_uri)
+        else:
+            self._call_spotify('start_playback', device_id=device_id, context_uri=playlist_uri)
 
     def play(self):
         cfg = self.storage.load()
@@ -170,9 +201,12 @@ class SpotifyPlayer:
         # album art
         images = item.get('album', {}).get('images') or []
         image_url = images[0]['url'] if images else None
-        # include track id to allow mapping lookups
-        track_id = item.get('id') or item.get('uri')
-        return {'source':'spotify','id': track_id,'title':title,'artist':artists,'album':album,'position_ms':position,'duration_ms':duration,'playing':playing,'image_url':image_url}
+        # include track uri (must be full URI for resume to work with offset parameter)
+        # Prefer the URI field, but construct it from ID if URI is not available
+        track_uri = item.get('uri')
+        if not track_uri and item.get('id'):
+            track_uri = f"spotify:track:{item.get('id')}"
+        return {'source':'spotify','id': track_uri,'title':title,'artist':artists,'album':album,'position_ms':position,'duration_ms':duration,'playing':playing,'image_url':image_url}
 
     def list_devices(self):
         try:

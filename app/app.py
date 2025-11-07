@@ -1362,19 +1362,72 @@ def api_mappings():
         }
         if m.get('type') == 'local':
             try:
-                base = player.local.base
                 import os
                 path = m.get('id') or ''
-                # if absolute, derive relpath
-                if os.path.isabs(path):
-                    name = os.path.relpath(path, base)
+                
+                # Use same logic as /api/playlists for consistency
+                # For m3u files, use the filename without extension as the friendly name
+                if path.lower().endswith('.m3u'):
+                    name = os.path.splitext(os.path.basename(path))[0]
                 else:
-                    name = path
+                    # For directories, try to get relative path from either music or audiobooks base
+                    music_base = player.local.base
+                    audiobooks_base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'audiobooks'))
+                    
+                    name = None
+                    # Try music base first
+                    try:
+                        if os.path.isabs(path) and path.startswith(music_base):
+                            name = os.path.relpath(path, music_base)
+                        elif not os.path.isabs(path):
+                            # Relative path - use as is
+                            name = path
+                    except Exception:
+                        pass
+                    
+                    # If that didn't work, try audiobooks base
+                    if name is None:
+                        try:
+                            if os.path.isabs(path) and path.startswith(audiobooks_base):
+                                name = os.path.relpath(path, audiobooks_base)
+                        except Exception:
+                            pass
+                    
+                    # Fall back to the original path if neither worked
+                    if name is None:
+                        name = path
+                
                 entry['name'] = name or path
             except Exception:
                 entry['name'] = m.get('id')
         else:
-            entry['name'] = m.get('id')
+            # Spotify mapping - try to fetch actual playlist name
+            playlist_id = m.get('id')
+            try:
+                # Extract playlist ID from URI or URL if needed
+                if playlist_id:
+                    # Handle various formats: spotify:playlist:ID, https://open.spotify.com/playlist/ID, or just ID
+                    if 'spotify:playlist:' in playlist_id:
+                        clean_id = playlist_id.split('spotify:playlist:')[1].split('?')[0]
+                    elif 'open.spotify.com/playlist/' in playlist_id:
+                        clean_id = playlist_id.split('open.spotify.com/playlist/')[1].split('?')[0].split('/')[0]
+                    else:
+                        clean_id = playlist_id
+                    
+                    # Try to fetch playlist details from Spotify
+                    try:
+                        playlist_info = player.spotify._call_spotify('playlist', clean_id, fields='name')
+                        if playlist_info and playlist_info.get('name'):
+                            entry['name'] = playlist_info['name']
+                        else:
+                            entry['name'] = playlist_id
+                    except Exception:
+                        # If API call fails, just use the ID
+                        entry['name'] = playlist_id
+                else:
+                    entry['name'] = playlist_id
+            except Exception:
+                entry['name'] = m.get('id')
         result.append(entry)
     return jsonify({'mappings': result})
 

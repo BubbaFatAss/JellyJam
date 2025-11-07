@@ -41,7 +41,9 @@
       }
       select.appendChild(new Option('-- select a mapping --', ''));
       for(const m of maps){
-        const label = (m.name && m.name.length>0)? m.name : (m.id || m.card_id);
+        const playlistName = (m.name && m.name.length>0)? m.name : (m.id || 'Unknown');
+        const typeLabel = m.type === 'spotify' ? '🎵 Spotify' : '💿 Local';
+        const label = `[${m.card_id}] ${typeLabel}: ${playlistName}`;
         select.appendChild(new Option(label, m.card_id));
       }
       document.getElementById('mapping-play').disabled = false;

@@ -19,6 +19,32 @@ class Player:
         if not mapping:
             print(f'No mapping for card {card_id}')
             return
+        
+        # Stop any currently playing source before starting the new one
+        if self._state.get('playing'):
+            current_source = self._state.get('source')
+            new_source = mapping['type']
+            # Only stop if switching to a different source or different mapping
+            current_card = self._state.get('mapping_card')
+            if current_source and (current_source != new_source or current_card != card_id):
+                # Save resume position before stopping (if current mapping has resume enabled)
+                self._save_resume_position()
+                
+                print(f'Stopping {current_source} player before starting {new_source}')
+                if current_source == 'local':
+                    try:
+                        if hasattr(self.local, 'stop'):
+                            self.local.stop()
+                        else:
+                            self.local.player.stop()
+                    except Exception as e:
+                        print(f'Error stopping local player: {e}')
+                elif current_source == 'spotify':
+                    try:
+                        self.spotify.pause()
+                    except Exception as e:
+                        print(f'Error stopping Spotify player: {e}')
+        
         if mapping['type'] == 'local':
             print(f'Playing local playlist {mapping["id"]}')
             shuffle = bool(mapping.get('shuffle'))
@@ -62,7 +88,30 @@ class Player:
             self._state.update({'playing': True, 'source': 'local', 'track': mapping['id'], 'mapping_card': card_id})
         elif mapping['type'] == 'spotify':
             print(f'Playing spotify playlist {mapping["id"]}')
-            self.spotify.play_playlist(mapping['id'])
+            
+            # Check if we should resume from saved position
+            resume_track_uri = None
+            resume_position_ms = None
+            if mapping.get('resume_position'):
+                try:
+                    saved_state = mapping.get('saved_state', {})
+                    saved_track = saved_state.get('track')
+                    saved_position = saved_state.get('position_ms')
+                    
+                    if saved_track and saved_position is not None:
+                        resume_track_uri = saved_track
+                        resume_position_ms = saved_position
+                        print(f'Will resume Spotify at track={saved_track}, position={saved_position}ms')
+                except Exception as e:
+                    print(f'Failed to prepare Spotify resume: {e}')
+            
+            # Start playlist with optional resume parameters
+            self.spotify.play_playlist(
+                mapping['id'],
+                resume_track_uri=resume_track_uri,
+                resume_position_ms=resume_position_ms
+            )
+            
             # apply mapping options for spotify
             try:
                 self.spotify.set_shuffle(bool(mapping.get('shuffle')))
