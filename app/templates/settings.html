@@ -6,7 +6,9 @@
 <!-- Main Settings Tabs -->
 <div class="settings-tabs" style="margin-bottom:1.5rem;">
   <button type="button" id="main-tab-display" class="tab-btn active">Display</button>
+  <button type="button" id="main-tab-lighting" class="tab-btn">Lighting</button>
   <button type="button" id="main-tab-artwork" class="tab-btn">Artwork</button>
+  <button type="button" id="main-tab-mqtt" class="tab-btn">MQTT</button>
 </div>
 
 <!-- Display Tab -->
@@ -95,6 +97,41 @@
 </form>
 </div>
 
+<!-- Lighting Tab -->
+<div id="lighting-tab-content" style="display:none;">
+  <h3>Nightlight Hardware Settings</h3>
+  <p style="margin-bottom:1rem;color:#666;">
+    Configure the WS2812B LED strip used for the nightlight feature.
+  </p>
+  
+  <form method="post" action="{{ url_for('save_lighting_settings') }}">
+    <div>
+      <label for="nightlight_pin">GPIO Pin (BCM Numbering)</label>
+      <input type="number" id="nightlight_pin" name="nightlight_pin" min="0" max="27" 
+             value="{{ lighting_cfg.get('gpio_pin', 18) }}" required>
+      <small style="color:#666;">GPIO pin for LED data line (e.g., 18, 12, 21). Uses BCM numbering.</small>
+    </div>
+    
+    <div>
+      <label for="nightlight_count">Number of LEDs</label>
+      <input type="number" id="nightlight_count" name="nightlight_count" min="1" max="1000" 
+             value="{{ lighting_cfg.get('led_count', 30) }}" required>
+      <small style="color:#666;">Total number of LEDs in the strip (1-1000).</small>
+    </div>
+    
+    <div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:1rem;margin-top:1rem;">
+      <p style="margin:0;color:#92400e;font-size:0.9rem;">
+        ⚠️ <strong>Note:</strong> Changing these settings requires restarting the application to take effect.
+      </p>
+    </div>
+    
+    <div style="margin-top:1rem;">
+      <button type="submit">Save Lighting Settings</button>
+      <a href="{{ url_for('settings') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+
 <!-- Artwork Tab -->
 <div id="artwork-tab-content" style="display:none;">
   <h3>Artwork Cache</h3>
@@ -112,31 +149,103 @@
   </button>
 </div>
 
+<!-- MQTT Tab -->
+<div id="mqtt-tab-content" style="display:none;">
+  <h3>MQTT Settings</h3>
+  <p style="margin-bottom:1rem;color:#666;">
+    Configure MQTT integration for connecting to Home Assistant and other MQTT-compatible systems.
+  </p>
+  
+  <form method="post" action="{{ url_for('save_mqtt_settings') }}">
+    <div>
+      <label for="mqtt_enabled">Enable MQTT</label>
+      <input type="checkbox" id="mqtt_enabled" name="mqtt_enabled" value="1" {% if mqtt_cfg.get('enabled') %}checked{% endif %}>
+    </div>
+    
+    <div>
+      <label for="mqtt_broker">MQTT Broker Address</label>
+      <input type="text" id="mqtt_broker" name="mqtt_broker" placeholder="localhost" value="{{ mqtt_cfg.get('broker', '') }}">
+      <small style="color:#666;">Hostname or IP address (e.g., homeassistant.local or 192.168.1.100)</small>
+    </div>
+    
+    <div>
+      <label for="mqtt_port">Port</label>
+      <input type="number" id="mqtt_port" name="mqtt_port" placeholder="1883" value="{{ mqtt_cfg.get('port', 1883) }}">
+    </div>
+    
+    <div>
+      <label for="mqtt_username">Username (optional)</label>
+      <input type="text" id="mqtt_username" name="mqtt_username" value="{{ mqtt_cfg.get('username', '') }}">
+    </div>
+    
+    <div>
+      <label for="mqtt_password">Password (optional)</label>
+      <input type="password" id="mqtt_password" name="mqtt_password" value="{{ mqtt_cfg.get('password', '') }}">
+    </div>
+    
+    <div>
+      <label for="mqtt_topic">Topic Prefix</label>
+      <input type="text" id="mqtt_topic" name="mqtt_topic" placeholder="jellyjam" value="{{ mqtt_cfg.get('topic', 'jellyjam') }}">
+      <small style="color:#666;">Base topic for MQTT messages (e.g., jellyjam/light)</small>
+    </div>
+    
+    <div>
+      <label for="mqtt_discovery">Enable Home Assistant Discovery</label>
+      <input type="checkbox" id="mqtt_discovery" name="mqtt_discovery" value="1" {% if mqtt_cfg.get('discovery', True) %}checked{% endif %}>
+      <small style="color:#666;">Automatically register with Home Assistant</small>
+    </div>
+    
+    <div style="margin-top:1rem;">
+      <button type="submit">Save MQTT Settings</button>
+      <a href="{{ url_for('settings') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function(){
-  // Main tab switching (Display vs Artwork)
+  // Main tab switching (Display vs Lighting vs Artwork vs MQTT)
   const mainTabDisplay = document.getElementById('main-tab-display');
+  const mainTabLighting = document.getElementById('main-tab-lighting');
   const mainTabArtwork = document.getElementById('main-tab-artwork');
+  const mainTabMqtt = document.getElementById('main-tab-mqtt');
   const displayTabContent = document.getElementById('display-tab-content');
+  const lightingTabContent = document.getElementById('lighting-tab-content');
   const artworkTabContent = document.getElementById('artwork-tab-content');
+  const mqttTabContent = document.getElementById('mqtt-tab-content');
   
   function showMainTab(tab) {
-    if (tab === 'artwork') {
-      displayTabContent.style.display = 'none';
+    // Hide all tabs
+    displayTabContent.style.display = 'none';
+    lightingTabContent.style.display = 'none';
+    artworkTabContent.style.display = 'none';
+    mqttTabContent.style.display = 'none';
+    mainTabDisplay.classList.remove('active');
+    mainTabLighting.classList.remove('active');
+    mainTabArtwork.classList.remove('active');
+    mainTabMqtt.classList.remove('active');
+    
+    // Show selected tab
+    if (tab === 'lighting') {
+      lightingTabContent.style.display = '';
+      mainTabLighting.classList.add('active');
+    } else if (tab === 'artwork') {
       artworkTabContent.style.display = '';
-      mainTabDisplay.classList.remove('active');
       mainTabArtwork.classList.add('active');
       loadArtworkInfo();
+    } else if (tab === 'mqtt') {
+      mqttTabContent.style.display = '';
+      mainTabMqtt.classList.add('active');
     } else {
       displayTabContent.style.display = '';
-      artworkTabContent.style.display = 'none';
       mainTabDisplay.classList.add('active');
-      mainTabArtwork.classList.remove('active');
     }
   }
   
   mainTabDisplay.addEventListener('click', () => showMainTab('display'));
+  mainTabLighting.addEventListener('click', () => showMainTab('lighting'));
   mainTabArtwork.addEventListener('click', () => showMainTab('artwork'));
+  mainTabMqtt.addEventListener('click', () => showMainTab('mqtt'));
   
   // Load artwork cache info
   function loadArtworkInfo() {

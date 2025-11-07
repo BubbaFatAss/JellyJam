@@ -1,0 +1,238 @@
+{% extends 'base.html' %}
+{% block title %}Lighting{% endblock %}
+{% block content %}
+<h2>Nightlight Control</h2>
+<p style="color:#666;margin-bottom:2rem;">Control your WS2812B LED strip nightlight.</p>
+
+<div style="max-width:600px;">
+  <!-- Power Toggle -->
+  <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:1.5rem;margin-bottom:1.5rem;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <h3 style="margin:0 0 0.25rem 0;">Power</h3>
+        <p style="margin:0;color:#666;font-size:0.9rem;" id="light-status">Loading...</p>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="light-power" disabled>
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <!-- Color Picker -->
+  <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:1.5rem;margin-bottom:1.5rem;" id="color-section">
+    <h3 style="margin:0 0 1rem 0;">Color</h3>
+    <div style="display:flex;align-items:center;gap:1rem;">
+      <input type="color" id="light-color" value="#ff6b35" style="width:60px;height:60px;border:2px solid #d1d5db;border-radius:8px;cursor:pointer;">
+      <div style="flex:1;">
+        <div style="font-family:monospace;font-size:1.1rem;font-weight:500;" id="color-display">#FF6B35</div>
+        <div style="font-size:0.85rem;color:#666;margin-top:0.25rem;">
+          RGB: <span id="rgb-display">255, 107, 53</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Brightness Slider -->
+  <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:1.5rem;margin-bottom:1.5rem;" id="brightness-section">
+    <h3 style="margin:0 0 1rem 0;">Brightness</h3>
+    <div style="display:flex;align-items:center;gap:1rem;">
+      <input type="range" id="light-brightness" min="0" max="255" value="128" 
+             style="flex:1;height:8px;border-radius:4px;background:#d1d5db;outline:none;-webkit-appearance:none;">
+      <div style="min-width:60px;text-align:right;font-weight:500;font-size:1.1rem;">
+        <span id="brightness-display">50</span>%
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  /* Toggle Switch */
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 60px;
+    height: 34px;
+  }
+  
+  .switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  
+  .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: .3s;
+    border-radius: 34px;
+  }
+  
+  .slider:before {
+    position: absolute;
+    content: "";
+    height: 26px;
+    width: 26px;
+    left: 4px;
+    bottom: 4px;
+    background-color: white;
+    transition: .3s;
+    border-radius: 50%;
+  }
+  
+  input:checked + .slider {
+    background: linear-gradient(90deg, var(--accent), #6fb1ff);
+  }
+  
+  input:checked + .slider:before {
+    transform: translateX(26px);
+  }
+  
+  input:disabled + .slider {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  
+  /* Range Slider */
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: linear-gradient(90deg, var(--accent), #6fb1ff);
+    cursor: pointer;
+  }
+  
+  input[type=range]::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: linear-gradient(90deg, var(--accent), #6fb1ff);
+    cursor: pointer;
+    border: none;
+  }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const powerToggle = document.getElementById('light-power');
+  const colorPicker = document.getElementById('light-color');
+  const brightnessSlider = document.getElementById('light-brightness');
+  const statusText = document.getElementById('light-status');
+  const colorDisplay = document.getElementById('color-display');
+  const rgbDisplay = document.getElementById('rgb-display');
+  const brightnessDisplay = document.getElementById('brightness-display');
+  
+  let updateTimeout = null;
+  
+  // Load current state
+  function loadState() {
+    fetch('/api/lighting/state')
+      .then(r => r.json())
+      .then(data => {
+        powerToggle.checked = data.on || false;
+        powerToggle.disabled = false;
+        
+        if (data.color) {
+          colorPicker.value = data.color;
+          updateColorDisplay(data.color);
+        }
+        
+        if (data.brightness !== undefined) {
+          brightnessSlider.value = data.brightness;
+          updateBrightnessDisplay(data.brightness);
+        }
+        
+        updateStatus(data.on);
+      })
+      .catch(e => {
+        statusText.textContent = 'Error loading state';
+        console.error('Failed to load lighting state:', e);
+      });
+  }
+  
+  function updateStatus(isOn) {
+    statusText.textContent = isOn ? 'On' : 'Off';
+    statusText.style.color = isOn ? '#10b981' : '#666';
+  }
+  
+  function updateColorDisplay(hex) {
+    colorDisplay.textContent = hex.toUpperCase();
+    const rgb = hexToRgb(hex);
+    rgbDisplay.textContent = `${rgb.r}, ${rgb.g}, ${rgb.b}`;
+  }
+  
+  function updateBrightnessDisplay(value) {
+    const percent = Math.round((value / 255) * 100);
+    brightnessDisplay.textContent = percent;
+  }
+  
+  function hexToRgb(hex) {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {
+      r: parseInt(result[1], 16),
+      g: parseInt(result[2], 16),
+      b: parseInt(result[3], 16)
+    } : {r: 0, g: 0, b: 0};
+  }
+  
+  function sendUpdate(state) {
+    fetch('/api/lighting/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state)
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (!data.success) {
+        showToast('Error updating light', 3000);
+      }
+    })
+    .catch(e => {
+      showToast('Error updating light', 3000);
+      console.error('Failed to update light:', e);
+    });
+  }
+  
+  // Power toggle
+  powerToggle.addEventListener('change', function() {
+    const isOn = this.checked;
+    updateStatus(isOn);
+    sendUpdate({ on: isOn });
+  });
+  
+  // Color picker
+  colorPicker.addEventListener('input', function() {
+    const color = this.value;
+    updateColorDisplay(color);
+    
+    // Debounce updates
+    clearTimeout(updateTimeout);
+    updateTimeout = setTimeout(() => {
+      sendUpdate({ color: color });
+    }, 300);
+  });
+  
+  // Brightness slider
+  brightnessSlider.addEventListener('input', function() {
+    const brightness = parseInt(this.value);
+    updateBrightnessDisplay(brightness);
+    
+    // Debounce updates
+    clearTimeout(updateTimeout);
+    updateTimeout = setTimeout(() => {
+      sendUpdate({ brightness: brightness });
+    }, 150);
+  });
+  
+  // Initial load
+  loadState();
+});
+</script>
+{% endblock %}

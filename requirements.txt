@@ -28,6 +28,9 @@ pycryptodome>=3.15
 # WS281x library for controlling SK6812/WS2812 LED strips (Linux/RPi only)
 rpi_ws281x>=4.3.0; platform_system=="Linux"
 
+# MQTT client for Home Assistant integration and nightlight control
+paho-mqtt>=1.6.0
+
 # NFC hardware libraries (optional)
 # nfcpy>=1.0
 

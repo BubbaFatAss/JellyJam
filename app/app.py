@@ -36,6 +36,42 @@ storage = Storage(os.path.join(data_dir, 'config.json'))
 player = Player(storage)
 nfc = NFCReader(callback=player.handle_nfc)
 
+# Initialize nightlight
+nightlight = None
+mqtt_client = None
+try:
+    from hardware.nightlight import NightLight
+    # Load lighting config from storage
+    cfg = storage.load() or {}
+    lighting_cfg = cfg.get('lighting', {})
+    gpio_pin = lighting_cfg.get('gpio_pin')  # None means use default/env var
+    led_count = lighting_cfg.get('led_count')  # None means use default/env var
+    nightlight = NightLight(num_leds=led_count, gpio_pin=gpio_pin)
+except Exception as e:
+    print(f'Warning: Nightlight initialization failed: {e}')
+
+# Initialize MQTT client if configured
+def init_mqtt():
+    """Initialize MQTT client with current config."""
+    global mqtt_client, nightlight
+    try:
+        cfg = storage.load() or {}
+        mqtt_cfg = cfg.get('mqtt', {})
+        
+        if mqtt_cfg.get('enabled'):
+            from mqtt.mqtt_client import create_mqtt_client
+            mqtt_client = create_mqtt_client(mqtt_cfg, nightlight)
+            if mqtt_client:
+                print('MQTT client initialized')
+    except Exception as e:
+        print(f'Warning: MQTT initialization failed: {e}')
+
+# Initialize MQTT on startup
+try:
+    init_mqtt()
+except Exception as e:
+    print(f'Warning: Could not initialize MQTT: {e}')
+
 # Helper: normalize track identifiers (especially local file paths) before hashing.
 import hashlib, urllib.parse, re
 def _canonical_track_id(s):
@@ -439,7 +475,14 @@ def settings():
         plugins_json = json.dumps(disp.get('plugins', {}), indent=2)
     except Exception:
         plugins_json = '{}'
-    return render_template('settings.html', display_cfg=disp, saved=saved_flag, plugins_json=plugins_json)
+    
+    # Get MQTT config
+    mqtt_cfg = cfg.get('mqtt', {})
+    
+    # Get Lighting config
+    lighting_cfg = cfg.get('lighting', {})
+    
+    return render_template('settings.html', display_cfg=disp, saved=saved_flag, plugins_json=plugins_json, mqtt_cfg=mqtt_cfg, lighting_cfg=lighting_cfg)
 
 @app.route('/api/artwork/info', methods=['GET'])
 def artwork_info():
@@ -486,6 +529,67 @@ def clear_artwork_cache():
             return jsonify({'success': True, 'message': 'No artwork cache to clear'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/settings/mqtt', methods=['POST'])
+def save_mqtt_settings():
+    """Save MQTT configuration settings."""
+    try:
+        cfg = storage.load() or {}
+        
+        mqtt_cfg = {
+            'enabled': bool(request.form.get('mqtt_enabled')),
+            'broker': request.form.get('mqtt_broker', '').strip(),
+            'port': int(request.form.get('mqtt_port', 1883)),
+            'username': request.form.get('mqtt_username', '').strip(),
+            'password': request.form.get('mqtt_password', '').strip(),
+            'topic': request.form.get('mqtt_topic', 'jellyjam').strip(),
+            'discovery': bool(request.form.get('mqtt_discovery'))
+        }
+        
+        cfg['mqtt'] = mqtt_cfg
+        storage.save(cfg)
+        
+        # Restart MQTT client
+        try:
+            global mqtt_client
+            if mqtt_client:
+                mqtt_client.disconnect()
+                mqtt_client = None
+            init_mqtt()
+        except Exception as e:
+            print(f'Error restarting MQTT client: {e}')
+        
+        return redirect(url_for('settings', saved=1))
+    except Exception as e:
+        return redirect(url_for('settings', error=str(e)))
+
+@app.route('/settings/lighting', methods=['POST'])
+def save_lighting_settings():
+    """Save lighting hardware configuration."""
+    try:
+        cfg = storage.load() or {}
+        
+        gpio_pin = int(request.form.get('nightlight_pin', 18))
+        led_count = int(request.form.get('nightlight_count', 30))
+        
+        # Validate inputs
+        if gpio_pin < 0 or gpio_pin > 27:
+            return redirect(url_for('settings', error='GPIO pin must be between 0 and 27'))
+        
+        if led_count < 1 or led_count > 1000:
+            return redirect(url_for('settings', error='LED count must be between 1 and 1000'))
+        
+        lighting_cfg = {
+            'gpio_pin': gpio_pin,
+            'led_count': led_count
+        }
+        
+        cfg['lighting'] = lighting_cfg
+        storage.save(cfg)
+        
+        return redirect(url_for('settings', saved=1))
+    except Exception as e:
+        return redirect(url_for('settings', error=str(e)))
 
 # create LED matrix mirror (in-memory buffer, hardware-backed when available)
 try:
@@ -975,6 +1079,46 @@ def api_playlists():
 def display_page():
     cfg = storage.load()
     return render_template('display.html', config=cfg)
+
+
+@app.route('/lighting')
+def lighting_page():
+    """Nightlight control page."""
+    return render_template('lighting.html')
+
+
+@app.route('/api/lighting/state', methods=['GET'])
+def get_lighting_state():
+    """Get current nightlight state."""
+    try:
+        global nightlight
+        if nightlight:
+            return jsonify(nightlight.get_state())
+        else:
+            return jsonify({'on': False, 'color': '#ff6b35', 'brightness': 128})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/lighting/state', methods=['POST'])
+def set_lighting_state():
+    """Update nightlight state."""
+    try:
+        global nightlight
+        if not nightlight:
+            return jsonify({'success': False, 'error': 'Nightlight not initialized'}), 500
+        
+        data = request.get_json() or {}
+        
+        on = data.get('on')
+        color = data.get('color')
+        brightness = data.get('brightness')
+        
+        state = nightlight.set_state(on=on, color=color, brightness=brightness)
+        
+        return jsonify({'success': True, 'state': state})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/display')
