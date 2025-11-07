@@ -66,11 +66,7 @@ def init_mqtt():
     except Exception as e:
         print(f'Warning: MQTT initialization failed: {e}')
 
-# Initialize MQTT on startup
-try:
-    init_mqtt()
-except Exception as e:
-    print(f'Warning: Could not initialize MQTT: {e}')
+# Note: MQTT initialization is deferred until after matrix is created (see below)
 
 # Helper: normalize track identifiers (especially local file paths) before hashing.
 import hashlib, urllib.parse, re
@@ -717,6 +713,12 @@ try:
         pass
 except Exception:
     matrix = None
+
+# Initialize MQTT client now that both nightlight and matrix are available
+try:
+    init_mqtt()
+except Exception as e:
+    print(f'Warning: Could not initialize MQTT: {e}')
 
 # ensure animations dir exists
 try:
