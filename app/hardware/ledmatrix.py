@@ -1,13 +1,14 @@
 """
 LED matrix helper for a 2D WS2812b matrix.
 
-This provides a simple in-memory 16x16 pixel buffer and optional hardware
+This provides a simple in-memory 2D pixel buffer and optional hardware
 backing using common Raspberry Pi LED libraries if available. If the
 hardware library is not present the module provides a dummy that keeps the
 buffer in memory so the web UI can still mirror the display.
 
 API:
- - create_matrix(width=16,height=16) -> matrix object with get_pixels()/set_pixels()
+ - create_matrix(width=None, height=None, config=None) -> matrix object with get_pixels()/set_pixels()
+ - config dict can contain 'width' and 'height' keys (preferred over positional args)
  - get_pixels() returns list of hex strings length width*height (row-major)
  - set_pixels(list_of_hex) accepts row-major list or a nested list
 """
@@ -41,25 +42,47 @@ except Exception:
 
 
 class LEDMatrix:
-    def __init__(self, width: int = 16, height: int = 16):
-        self.width = int(width)
-        self.height = int(height)
+    def __init__(self, width: Optional[int] = None, height: Optional[int] = None, config: Optional[dict] = None):
+        """Initialize LED Matrix.
+        
+        Args:
+            width: Matrix width in pixels (deprecated - prefer config)
+            height: Matrix height in pixels (deprecated - prefer config)
+            config: Configuration dict containing display settings:
+                - width: Matrix width in pixels (default: 16)
+                - height: Matrix height in pixels (default: 16)
+                - pin: GPIO pin number (default: 18)
+                - freq_hz: Signal frequency in Hz (default: 800000)
+                - dma: DMA channel (default: 10)
+                - invert: Invert signal (default: False)
+                - brightness: Initial brightness 0-255 (default: 64)
+                - channel: PWM channel (default: 0)
+                - serpentine: Serpentine wiring pattern (default: False)
+        """
+        # Use config dict or fallback to environment variables or defaults
+        cfg = config or {}
+        
+        # Read dimensions from config if provided, otherwise use parameters or defaults
+        self.width = int(cfg.get('width', width or int(os.environ.get('LED_WIDTH', '16'))))
+        self.height = int(cfg.get('height', height or int(os.environ.get('LED_HEIGHT', '16'))))
+        
         # row-major buffer, initial black
         self._buf: List[str] = ['#000000'] * (self.width * self.height)
         # hardware handle if available
         self._hw = None
-        # If rpi_ws281x is available, attempt to initialize hardware using env vars.
+        # If rpi_ws281x is available, attempt to initialize hardware
         if _HAVE_WS:
             try:
-                # Environment-driven configuration — keep safe defaults
+                # Configuration-driven setup with fallbacks to env vars then defaults
                 num = self.width * self.height
-                pin = int(os.environ.get('LED_PIN', '18'))
-                freq = int(os.environ.get('LED_FREQ_HZ', '800000'))
-                dma = int(os.environ.get('LED_DMA', '10'))
-                invert = bool(int(os.environ.get('LED_INVERT', '0')))
-                brightness = int(os.environ.get('LED_BRIGHTNESS', '64'))
-                channel = int(os.environ.get('LED_CHANNEL', '0'))
-                serpentine = os.environ.get('LED_SERPENTINE', '0') in ('1', 'true', 'True')
+                pin = int(cfg.get('pin', os.environ.get('LED_PIN', '18')))
+                freq = int(cfg.get('freq_hz', os.environ.get('LED_FREQ_HZ', '800000')))
+                dma = int(cfg.get('dma', os.environ.get('LED_DMA', '10')))
+                invert = bool(cfg.get('invert', int(os.environ.get('LED_INVERT', '0'))))
+                brightness = int(cfg.get('brightness', os.environ.get('LED_BRIGHTNESS', '64')))
+                channel = int(cfg.get('channel', os.environ.get('LED_CHANNEL', '0')))
+                serpentine_val = cfg.get('serpentine', os.environ.get('LED_SERPENTINE', '0'))
+                serpentine = serpentine_val in (True, 1, '1', 'true', 'True')
                 self._serpentine = serpentine
                 # Optionally provide strip type name (not required)
                 strip_type = None
@@ -367,8 +390,18 @@ class LEDMatrix:
             return '#000000'
 
 
-def create_matrix(width: int = 16, height: int = 16) -> LEDMatrix:
-    return LEDMatrix(width=width, height=height)
+def create_matrix(width: Optional[int] = None, height: Optional[int] = None, config: Optional[dict] = None) -> LEDMatrix:
+    """Create an LED Matrix instance.
+    
+    Args:
+        width: Matrix width (deprecated - prefer config)
+        height: Matrix height (deprecated - prefer config)
+        config: Configuration dict with 'width' and 'height' keys
+        
+    Returns:
+        LEDMatrix instance
+    """
+    return LEDMatrix(width=width, height=height, config=config)
 
 
 def write_hw_buffer(hw, flat_pixels, width, height, serpentine=False):

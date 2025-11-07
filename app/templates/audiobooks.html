@@ -368,31 +368,12 @@
     loadJobs();
 
     // Setup Socket.IO for real-time conversion updates
-    async function setupSocketIO() {
+    (async function() {
       try {
-        const r = await fetch('/api/socketio_client');
-        const j = await r.json();
+        const ok = await setupSocketIO();
         
-        // Load Socket.IO client
-        await new Promise((resolve, reject) => {
-          const s = document.createElement('script');
-          const src = j.cdn || '/socket.io/socket.io.js';
-          s.src = src;
-          s.onload = resolve;
-          s.onerror = () => {
-            // Try fallback
-            const fallback = document.createElement('script');
-            fallback.src = '/socket.io/socket.io.js';
-            fallback.onload = resolve;
-            fallback.onerror = () => reject(new Error('Failed to load socket.io client'));
-            document.head.appendChild(fallback);
-          };
-          document.head.appendChild(s);
-        });
-        
-        // Connect and listen for events
-        if (typeof io !== 'undefined') {
-          const socket = io();
+        if (ok && window.jellyJamSocket) {
+          const socket = window.jellyJamSocket;
           
           socket.on('connect', () => {
             console.log('Socket.IO connected - subscribing to audiobook jobs');
@@ -485,8 +466,6 @@
       } catch(e) {
         console.warn('Socket.IO setup failed, falling back to polling:', e);
       }
-    }
-    
-    setupSocketIO();
+    })();
   </script>
 {% endblock %}

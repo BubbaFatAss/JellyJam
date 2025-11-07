@@ -26,7 +26,7 @@ class NightLight:
         }
         
         self._strip = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # Use RLock to allow recursive locking
         self._state_callbacks = []
         
         # Try to initialize the LED strip

@@ -200,74 +200,51 @@
     }catch(e){}
   }
 
-  // Try to load a Socket.IO client recommended by the server, then initialize socket.
-  async function setupSocketIO(){
-    try{
-      const r = await fetch('/api/socketio_client');
-      if(r.ok){
-        const j = await r.json();
-        const src = j.cdn || '/socket.io/socket.io.js';
-        await new Promise((resolve,reject)=>{
-          const s = document.createElement('script');
-          s.src = src;
-          s.async = true;
-          s.onload = ()=>resolve();
-          s.onerror = ()=>reject(new Error('Failed to load socket.io client'));
-          document.head.appendChild(s);
-        });
-      } else {
-        // try fallback path
-        await new Promise((resolve,reject)=>{
-          const s = document.createElement('script');
-          s.src = '/socket.io/socket.io.js';
-          s.async = true;
-          s.onload = ()=>resolve();
-          s.onerror = ()=>reject(new Error('Failed to load fallback socket.io client'));
-          document.head.appendChild(s);
-        });
-      }
-      // If io is available, create socket and wire display_update
-      if(typeof io !== 'undefined'){
-        try{
-          const socket = io();
-          socket.on('connect', ()=>{ setUpdateModeText('Socket.IO (push)'); });
-          socket.on('disconnect', ()=>{ setUpdateModeText('Socket.IO (disconnected)'); });
-          socket.on('display_update', (data)=>{
-            try{ applyPixels(data.pixels || []); }catch(e){}
-          });
-          // nowplaying event (no-op here but available for clients that show metadata)
-          socket.on('nowplaying', (data)=>{
-            try{ /* placeholder in case we want to show now-playing on display page */ }catch(e){}
-          });
-          // rotary2 mode updates
-          socket.on('rotary2_mode', (data)=>{
-            try{ document.getElementById('rotary2-mode').innerText = (data && data.mode) ? data.mode : 'skip'; }catch(e){}
-          });
-          // Successful socket setup
-          setUpdateModeText('Socket.IO (push)');
-          return true;
-        }catch(e){
-          return false;
-        }
-      }
-      return false;
-    }catch(e){
-      return false;
-    }
-  }
-
   // Initialize: attempt socket setup; otherwise fall back to polling
   (async function(){
     setUpdateModeText('Initializing...');
     const ok = await setupSocketIO();
+    if(ok && window.jellyJamSocket){
+      // Wire up display-specific Socket.IO events
+      window.jellyJamSocket.on('connect', ()=>{ setUpdateModeText('Socket.IO (push)'); });
+      window.jellyJamSocket.on('disconnect', ()=>{ setUpdateModeText('Socket.IO (disconnected)'); });
+      window.jellyJamSocket.on('display_update', (data)=>{
+        try{ applyPixels(data.pixels || []); }catch(e){}
+      });
+      window.jellyJamSocket.on('nowplaying', (data)=>{
+        try{ /* placeholder in case we want to show now-playing on display page */ }catch(e){}
+      });
+      window.jellyJamSocket.on('rotary2_mode', (data)=>{
+        try{ document.getElementById('rotary2-mode').innerText = (data && data.mode) ? data.mode : 'skip'; }catch(e){}
+      });
+      
+      // Socket.IO for real-time display power/brightness updates from MQTT
+      window.jellyJamSocket.on('display_power_update', function(state) {
+        console.log('Received display power update from MQTT:', state);
+        
+        // Update power toggle without triggering events
+        if (state.on !== undefined && displayPowerToggle) {
+          displayPowerToggle.checked = state.on;
+          updateDisplayStatus(state.on);
+        }
+        
+        // Update brightness slider without triggering events
+        if (state.brightness !== undefined && briEl) {
+          briEl.value = state.brightness;
+          briVal.textContent = state.brightness + '%';
+        }
+      });
+      
+      setUpdateModeText('Socket.IO (push)');
+      console.log('Socket.IO display MQTT updates registered');
+      // Also request an initial buffer in case server didn't emit on connect
+      try{ fetchDisplay(); }catch(e){}
+    }
     if(!ok){
       // polling fallback
       setUpdateModeText('Polling (500ms)');
       setInterval(fetchDisplay, 500);
       fetchDisplay();
-    } else {
-      // also request an initial buffer in case server didn't emit on connect
-      try{ fetchDisplay(); }catch(e){}
     }
   })();
 

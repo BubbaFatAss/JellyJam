@@ -379,7 +379,11 @@ class WS2812Plugin(BasePlugin):
         # lazy import of legacy LEDMatrix
         try:
             from .ledmatrix import LEDMatrix as LegacyLEDMatrix
-            self._impl = LegacyLEDMatrix(self.width, self.height)
+            # Pass config to LEDMatrix so it can read dimensions from there
+            matrix_config = {'width': self.width, 'height': self.height}
+            if cfg:
+                matrix_config.update(cfg)
+            self._impl = LegacyLEDMatrix(config=matrix_config)
             # Initialize power state
             self._impl._power_on = True
             self._impl._saved_brightness = None
@@ -532,6 +536,8 @@ class RGBMatrixPlugin(BasePlugin):
         # Initialize power state
         self._power_on = True
         self._saved_brightness = None
+        # Cache brightness for when hardware is not present
+        self._cached_brightness = 100
         # use a PIL image buffer when possible; fall back to list of hex strings
         if _HAVE_PIL:
             try:
@@ -747,16 +753,25 @@ class RGBMatrixPlugin(BasePlugin):
         if self._hardware is not None:
             try:
                 self._hardware.brightness = max(0, min(100, int(percent)))
+                # Also cache it so get_brightness returns the correct value
+                self._cached_brightness = max(0, min(100, int(percent)))
             except Exception:
                 log.exception('RGBMatrixPlugin set_brightness failed')
+        else:
+            # No hardware - just cache the value
+            self._cached_brightness = max(0, min(100, int(percent)))
 
     def get_brightness(self) -> int:
         if self._hardware is not None:
             try:
-                return self._hardware.brightness
+                brightness = self._hardware.brightness
+                # Update cache when reading from hardware
+                self._cached_brightness = brightness
+                return brightness
             except Exception:
                 log.exception('RGBMatrixPlugin get_brightness failed')
-        return 100
+        # Return cached value (whether hardware failed or isn't present)
+        return self._cached_brightness
     
     def set_power(self, on: bool):
         """Turn the display on/off by controlling brightness."""

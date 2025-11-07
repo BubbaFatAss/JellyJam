@@ -41,8 +41,39 @@
       <input id="ws_height" name="ws_height" type="number" value="{{ (display_cfg.plugins.ws2812.height if display_cfg.plugins is defined and display_cfg.plugins.ws2812 is defined and display_cfg.plugins.ws2812.height is defined else 16) }}">
     </div>
     <div>
-      <label for="ws_serpentine">Serpentine wiring</label>
+      <label for="ws_pin">GPIO Pin</label>
+      <input id="ws_pin" name="ws_pin" type="number" value="{{ (display_cfg.plugins.ws2812.pin if display_cfg.plugins is defined and display_cfg.plugins.ws2812 is defined and display_cfg.plugins.ws2812.pin is defined else 18) }}">
+      <small style="color:#666;">GPIO pin for data (default: 18)</small>
+    </div>
+    <div>
+      <label for="ws_brightness">Initial Brightness</label>
+      <input id="ws_brightness" name="ws_brightness" type="number" min="0" max="255" value="{{ (display_cfg.plugins.ws2812.brightness if display_cfg.plugins is defined and display_cfg.plugins.ws2812 is defined and display_cfg.plugins.ws2812.brightness is defined else 64) }}">
+      <small style="color:#666;">0-255 (default: 64)</small>
+    </div>
+    <div>
+      <label for="ws_freq_hz">Frequency (Hz)</label>
+      <input id="ws_freq_hz" name="ws_freq_hz" type="number" value="{{ (display_cfg.plugins.ws2812.freq_hz if display_cfg.plugins is defined and display_cfg.plugins.ws2812 is defined and display_cfg.plugins.ws2812.freq_hz is defined else 800000) }}">
+      <small style="color:#666;">Signal frequency (default: 800000)</small>
+    </div>
+    <div>
+      <label for="ws_dma">DMA Channel</label>
+      <input id="ws_dma" name="ws_dma" type="number" min="0" max="14" value="{{ (display_cfg.plugins.ws2812.dma if display_cfg.plugins is defined and display_cfg.plugins.ws2812 is defined and display_cfg.plugins.ws2812.dma is defined else 10) }}">
+      <small style="color:#666;">DMA channel 0-14 (default: 10)</small>
+    </div>
+    <div>
+      <label for="ws_channel">PWM Channel</label>
+      <input id="ws_channel" name="ws_channel" type="number" min="0" max="1" value="{{ (display_cfg.plugins.ws2812.channel if display_cfg.plugins is defined and display_cfg.plugins.ws2812 is defined and display_cfg.plugins.ws2812.channel is defined else 0) }}">
+      <small style="color:#666;">PWM channel 0 or 1 (default: 0)</small>
+    </div>
+    <div>
+      <label for="ws_invert">Invert Signal</label>
+      <input id="ws_invert" name="ws_invert" type="checkbox" value="1" {% if display_cfg.plugins is defined and display_cfg.plugins.ws2812 is defined and display_cfg.plugins.ws2812.invert %}checked{% endif %}>
+      <small style="color:#666;">Invert the output signal</small>
+    </div>
+    <div>
+      <label for="ws_serpentine">Serpentine Wiring</label>
       <input id="ws_serpentine" name="ws_serpentine" type="checkbox" value="1" {% if display_cfg.plugins is defined and display_cfg.plugins.ws2812 is defined and display_cfg.plugins.ws2812.serpentine %}checked{% endif %}>
+      <small style="color:#666;">Alternate row direction (zigzag pattern)</small>
     </div>
     </div>
 

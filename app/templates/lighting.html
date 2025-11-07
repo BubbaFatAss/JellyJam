@@ -233,6 +233,37 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Initial load
   loadState();
+  
+  // Socket.IO for real-time updates from MQTT
+  (async function() {
+    const ok = await setupSocketIO();
+    
+    if (ok && window.jellyJamSocket) {
+      console.log('Setting up nightlight MQTT updates');
+      
+      window.jellyJamSocket.on('nightlight_update', function(state) {
+        console.log('Received nightlight update from MQTT:', state);
+        
+        // Update UI without triggering events
+        if (state.on !== undefined) {
+          powerToggle.checked = state.on;
+          updateStatus(state.on);
+        }
+        
+        if (state.color) {
+          colorPicker.value = state.color;
+          updateColorDisplay(state.color);
+        }
+        
+        if (state.brightness !== undefined) {
+          brightnessSlider.value = state.brightness;
+          updateBrightnessDisplay(state.brightness);
+        }
+      });
+    } else {
+      console.warn('Socket.IO setup failed - real-time updates disabled');
+    }
+  })();
 });
 </script>
 {% endblock %}

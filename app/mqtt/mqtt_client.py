@@ -8,7 +8,7 @@ import time
 
 
 class MQTTClient:
-    def __init__(self, config, nightlight=None, display=None):
+    def __init__(self, config, nightlight=None, display=None, socketio=None):
         """
         Initialize MQTT client.
         
@@ -16,10 +16,12 @@ class MQTTClient:
             config: MQTT configuration dict with broker, port, username, password, topic, discovery
             nightlight: NightLight instance to control
             display: Display matrix instance to control
+            socketio: Flask-SocketIO instance for broadcasting updates
         """
         self.config = config
         self.nightlight = nightlight
         self.display = display
+        self.socketio = socketio
         self.client = None
         self.connected = False
         self._stop_event = threading.Event()
@@ -113,8 +115,9 @@ class MQTTClient:
             if self.discovery_enabled:
                 self._send_discovery()
             
-            # Publish current state
+            # Publish current state for both nightlight and display
             self._publish_state()
+            self.publish_display_state()
         else:
             print(f'Failed to connect to MQTT broker, return code {rc}')
     
@@ -166,6 +169,12 @@ class MQTTClient:
             # Publish updated state
             self._publish_state()
             
+            # Emit Socket.IO update for web UI
+            if self.socketio and self.nightlight:
+                state = self.nightlight.get_state()
+                print(f'Emitting nightlight_update via Socket.IO: {state}')
+                self.socketio.emit('nightlight_update', state)
+            
         except Exception as e:
             print(f'Error handling light command: {e}')
     
@@ -173,26 +182,44 @@ class MQTTClient:
         """Handle incoming display control commands from MQTT."""
         try:
             data = json.loads(payload)
+            print(f'Received display MQTT command: {data}')
             
             if not self.display:
+                print('Cannot handle display command: display is None')
                 return
             
             # Handle state (ON/OFF)
             if 'state' in data:
                 on = data['state'].upper() == 'ON'
+                print(f'Setting display power to: {on}')
                 self.display.set_power(on)
             
-            # Handle brightness (0-100 scale for HA, converted to 0-255)
+            # Handle brightness (0-100 scale, matches display internal range)
             if 'brightness' in data:
-                brightness_100 = int(data['brightness'])
-                brightness_255 = int((brightness_100 / 100.0) * 255)
-                self.display.set_brightness(brightness_255)
+                brightness = int(data['brightness'])
+                print(f'Setting display brightness to: {brightness}')
+                self.display.set_brightness(brightness)
             
             # Publish updated state
+            print('Publishing updated display state back to MQTT...')
             self.publish_display_state()
+            
+            # Emit Socket.IO update for web UI
+            if self.socketio and self.display:
+                display_state = {
+                    'on': self.display.get_power(),
+                    'brightness': self.display.get_brightness()
+                }
+                print(f'Emitting display_power_update via Socket.IO: {display_state}')
+                self.socketio.emit('display_power_update', display_state)
+            else:
+                if not self.socketio:
+                    print('Cannot emit Socket.IO update: socketio is None')
             
         except Exception as e:
             print(f'Error handling display command: {e}')
+            import traceback
+            traceback.print_exc()
     
     def _send_discovery(self):
         """Send Home Assistant MQTT Discovery messages."""
@@ -210,7 +237,8 @@ class MQTTClient:
                     "schema": "json",
                     "brightness": True,
                     "brightness_scale": 255,
-                    "rgb": True,
+                    "color_mode": True,
+                    "supported_color_modes": ["rgb"],
                     "device": {
                         "identifiers": ["jellyjam"],
                         "name": "JellyJam NFC Player",
@@ -276,6 +304,7 @@ class MQTTClient:
             payload = {
                 "state": "ON" if state['on'] else "OFF",
                 "brightness": state['brightness'],
+                "color_mode": "rgb",
                 "color": {
                     "r": r,
                     "g": g,
@@ -297,19 +326,24 @@ class MQTTClient:
         """Publish current display state to MQTT."""
         try:
             if not self.display or not self.connected:
+                if not self.display:
+                    print('Display state not published: display is None')
+                if not self.connected:
+                    print('Display state not published: not connected to MQTT')
                 return
             
             # Get display state
             power_on = self.display.get_power()
-            brightness_255 = self.display.get_brightness()
-            
-            # Convert brightness to 0-100 scale for Home Assistant
-            brightness_100 = int((brightness_255 / 255.0) * 100)
+            brightness_100 = self.display.get_brightness()  # Already in 0-100 range
             
             payload = {
                 "state": "ON" if power_on else "OFF",
                 "brightness": brightness_100
             }
+            
+            print(f'Publishing display state to {self.display_state_topic}: {payload}')
+            print(f'  Display object: {self.display}')
+            print(f'  Power: {power_on}, Brightness: {brightness_100}')
             
             self.client.publish(
                 self.display_state_topic,
@@ -320,6 +354,8 @@ class MQTTClient:
             
         except Exception as e:
             print(f'Error publishing display state: {e}')
+            import traceback
+            traceback.print_exc()
     
     def _hex_to_rgb(self, hex_color):
         """Convert hex color to RGB tuple."""
@@ -352,7 +388,7 @@ class MQTTClient:
             print(f'Error disconnecting from MQTT: {e}')
 
 
-def create_mqtt_client(config, nightlight=None, display=None):
+def create_mqtt_client(config, nightlight=None, display=None, socketio=None):
     """
     Factory function to create and initialize MQTT client.
     
@@ -360,6 +396,7 @@ def create_mqtt_client(config, nightlight=None, display=None):
         config: MQTT configuration dict
         nightlight: NightLight instance to control
         display: Display matrix instance to control
+        socketio: Flask-SocketIO instance for broadcasting updates
     
     Returns:
         MQTTClient instance or None if disabled/error
@@ -368,7 +405,7 @@ def create_mqtt_client(config, nightlight=None, display=None):
         if not config.get('enabled'):
             return None
         
-        client = MQTTClient(config, nightlight, display)
+        client = MQTTClient(config, nightlight, display, socketio)
         
         # Register state change callback with nightlight
         if nightlight:
@@ -380,4 +417,5 @@ def create_mqtt_client(config, nightlight=None, display=None):
         
     except Exception as e:
         print(f'Failed to create MQTT client: {e}')
+        return None
         return None

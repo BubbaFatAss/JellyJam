@@ -53,14 +53,14 @@ except Exception as e:
 # Initialize MQTT client if configured
 def init_mqtt():
     """Initialize MQTT client with current config."""
-    global mqtt_client, nightlight, matrix
+    global mqtt_client, nightlight, matrix, socketio
     try:
         cfg = storage.load() or {}
         mqtt_cfg = cfg.get('mqtt', {})
         
         if mqtt_cfg.get('enabled'):
             from mqtt.mqtt_client import create_mqtt_client
-            mqtt_client = create_mqtt_client(mqtt_cfg, nightlight, matrix)
+            mqtt_client = create_mqtt_client(mqtt_cfg, nightlight, matrix, socketio)
             if mqtt_client:
                 print('MQTT client initialized')
     except Exception as e:
@@ -321,6 +321,46 @@ def settings():
                             errs.append('ws2812 height must be 1-512')
                     except Exception:
                         errs.append('ws2812 height must be an integer')
+                # Validate pin
+                if 'pin' in ws and ws['pin'] is not None:
+                    try:
+                        pin = int(ws['pin'])
+                        if pin < 0 or pin > 40:
+                            errs.append('ws2812 pin must be 0-40')
+                    except Exception:
+                        errs.append('ws2812 pin must be an integer')
+                # Validate brightness
+                if 'brightness' in ws and ws['brightness'] is not None:
+                    try:
+                        brightness = int(ws['brightness'])
+                        if brightness < 0 or brightness > 255:
+                            errs.append('ws2812 brightness must be 0-255')
+                    except Exception:
+                        errs.append('ws2812 brightness must be an integer')
+                # Validate freq_hz
+                if 'freq_hz' in ws and ws['freq_hz'] is not None:
+                    try:
+                        freq = int(ws['freq_hz'])
+                        if freq < 400000 or freq > 1000000:
+                            errs.append('ws2812 freq_hz must be 400000-1000000')
+                    except Exception:
+                        errs.append('ws2812 freq_hz must be an integer')
+                # Validate DMA
+                if 'dma' in ws and ws['dma'] is not None:
+                    try:
+                        dma = int(ws['dma'])
+                        if dma < 0 or dma > 14:
+                            errs.append('ws2812 dma must be 0-14')
+                    except Exception:
+                        errs.append('ws2812 dma must be an integer')
+                # Validate channel
+                if 'channel' in ws and ws['channel'] is not None:
+                    try:
+                        channel = int(ws['channel'])
+                        if channel < 0 or channel > 1:
+                            errs.append('ws2812 channel must be 0 or 1')
+                    except Exception:
+                        errs.append('ws2812 channel must be an integer')
         # rgbmatrix validations
         rg = p.get('rgbmatrix')
         if rg is not None:
@@ -377,7 +417,15 @@ def settings():
             try:
                 ws_w = request.form.get('ws_width', '').strip()
                 ws_h = request.form.get('ws_height', '').strip()
-                if ws_w or ws_h or request.form.get('ws_serpentine'):
+                ws_pin = request.form.get('ws_pin', '').strip()
+                ws_brightness = request.form.get('ws_brightness', '').strip()
+                ws_freq_hz = request.form.get('ws_freq_hz', '').strip()
+                ws_dma = request.form.get('ws_dma', '').strip()
+                ws_channel = request.form.get('ws_channel', '').strip()
+                ws_serpentine = request.form.get('ws_serpentine')
+                ws_invert = request.form.get('ws_invert')
+                
+                if ws_w or ws_h or ws_pin or ws_brightness or ws_freq_hz or ws_dma or ws_channel or ws_serpentine or ws_invert:
                     ws_cfg = {}
                     if ws_w:
                         try:
@@ -389,8 +437,35 @@ def settings():
                             ws_cfg['height'] = int(ws_h)
                         except Exception:
                             pass
-                    if request.form.get('ws_serpentine'):
+                    if ws_pin:
+                        try:
+                            ws_cfg['pin'] = int(ws_pin)
+                        except Exception:
+                            pass
+                    if ws_brightness:
+                        try:
+                            ws_cfg['brightness'] = int(ws_brightness)
+                        except Exception:
+                            pass
+                    if ws_freq_hz:
+                        try:
+                            ws_cfg['freq_hz'] = int(ws_freq_hz)
+                        except Exception:
+                            pass
+                    if ws_dma:
+                        try:
+                            ws_cfg['dma'] = int(ws_dma)
+                        except Exception:
+                            pass
+                    if ws_channel:
+                        try:
+                            ws_cfg['channel'] = int(ws_channel)
+                        except Exception:
+                            pass
+                    if ws_serpentine:
                         ws_cfg['serpentine'] = True
+                    if ws_invert:
+                        ws_cfg['invert'] = True
                     plugins['ws2812'] = ws_cfg
             except Exception:
                 pass

@@ -6,6 +6,84 @@
     <title>JellyJam NFC Player</title>
     <link rel="icon" type="image/png" href="/static/favicon.png">
     <link rel="stylesheet" href="/static/style.css">
+    
+    <script>
+    // Simple toast helper (defined early so child templates can use it)
+    window.showToast = function(msg, timeout){
+      try{
+        const container = document.getElementById('toast');
+        if(!container) return;
+        const el = document.createElement('div');
+        el.className = 'jj-toast-item';
+        el.innerText = msg;
+        container.appendChild(el);
+        setTimeout(()=>{ el.classList.add('visible'); }, 10);
+        const t = timeout || 3000;
+        setTimeout(()=>{ el.classList.remove('visible'); setTimeout(()=>el.remove(),400); }, t);
+      }catch(e){ console.error(e); }
+    };
+    
+    // Global Socket.IO setup function
+    // Loads Socket.IO client dynamically and creates a connection
+    // Returns true if successful, false otherwise
+    window.setupSocketIO = async function(){
+      try{
+        // Check if already loaded
+        if(typeof io !== 'undefined'){
+          if(!window.jellyJamSocket){
+            window.jellyJamSocket = io();
+          }
+          return true;
+        }
+        
+        // Try to get recommended CDN from server
+        const r = await fetch('/api/socketio_client');
+        if(r.ok){
+          const j = await r.json();
+          const src = j.cdn || '/socket.io/socket.io.js';
+          await new Promise((resolve,reject)=>{
+            const s = document.createElement('script');
+            s.src = src;
+            s.async = true;
+            s.onload = ()=>resolve();
+            s.onerror = ()=>reject(new Error('Failed to load socket.io client'));
+            document.head.appendChild(s);
+          });
+        } else {
+          // try fallback path
+          await new Promise((resolve,reject)=>{
+            const s = document.createElement('script');
+            s.src = '/socket.io/socket.io.js';
+            s.async = true;
+            s.onload = ()=>resolve();
+            s.onerror = ()=>reject(new Error('Failed to load fallback socket.io client'));
+            document.head.appendChild(s);
+          });
+        }
+        
+        // If io is available, create socket
+        if(typeof io !== 'undefined'){
+          try{
+            window.jellyJamSocket = io();
+            window.jellyJamSocket.on('connect', ()=>{ 
+              console.log('JellyJam Socket.IO connected'); 
+            });
+            window.jellyJamSocket.on('disconnect', ()=>{ 
+              console.log('JellyJam Socket.IO disconnected'); 
+            });
+            return true;
+          }catch(e){
+            console.error('Failed to create Socket.IO connection:', e);
+            return false;
+          }
+        }
+        return false;
+      }catch(e){
+        console.error('Failed to setup Socket.IO:', e);
+        return false;
+      }
+    };
+    </script>
   </head>
   <body>
     <!-- SVG sprite icons -->
@@ -55,21 +133,5 @@
     </footer>
     <!-- Toast container -->
     <div id="toast" class="jj-toast" aria-live="polite" aria-atomic="true"></div>
-    <script>
-    // Simple toast helper
-    window.showToast = function(msg, timeout){
-      try{
-        const container = document.getElementById('toast');
-        if(!container) return;
-        const el = document.createElement('div');
-        el.className = 'jj-toast-item';
-        el.innerText = msg;
-        container.appendChild(el);
-        setTimeout(()=>{ el.classList.add('visible'); }, 10);
-        const t = timeout || 3000;
-        setTimeout(()=>{ el.classList.remove('visible'); setTimeout(()=>el.remove(),400); }, t);
-      }catch(e){ console.error(e); }
-    };
-    </script>
   </body>
 </html>
