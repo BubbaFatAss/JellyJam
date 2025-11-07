@@ -53,14 +53,14 @@ except Exception as e:
 # Initialize MQTT client if configured
 def init_mqtt():
     """Initialize MQTT client with current config."""
-    global mqtt_client, nightlight
+    global mqtt_client, nightlight, matrix
     try:
         cfg = storage.load() or {}
         mqtt_cfg = cfg.get('mqtt', {})
         
         if mqtt_cfg.get('enabled'):
             from mqtt.mqtt_client import create_mqtt_client
-            mqtt_client = create_mqtt_client(mqtt_cfg, nightlight)
+            mqtt_client = create_mqtt_client(mqtt_cfg, nightlight, matrix)
             if mqtt_client:
                 print('MQTT client initialized')
     except Exception as e:
@@ -1327,6 +1327,7 @@ def api_animations_delete():
 
 @app.route('/api/display/brightness', methods=['GET','POST'])
 def api_display_brightness():
+    global mqtt_client, matrix
     try:
         if request.method == 'GET':
             if matrix is None:
@@ -1342,7 +1343,37 @@ def api_display_brightness():
         if matrix is None:
             return jsonify({'ok': True, 'brightness': b_i})
         matrix.set_brightness(b_i)
+        
+        # Publish state to MQTT if available
+        if mqtt_client:
+            mqtt_client.publish_display_state()
+        
         return jsonify({'ok': True, 'brightness': b_i})
+    except Exception:
+        return jsonify({'error': 'internal'}), 500
+
+
+@app.route('/api/display/power', methods=['GET', 'POST'])
+def api_display_power():
+    """Get or set display power state."""
+    global mqtt_client, matrix
+    try:
+        if request.method == 'GET':
+            if matrix is None:
+                return jsonify({'on': False})
+            return jsonify({'on': matrix.get_power()})
+        # POST
+        data = request.json or {}
+        on = data.get('on', True)
+        if matrix is None:
+            return jsonify({'ok': True, 'on': on})
+        matrix.set_power(bool(on))
+        
+        # Publish state to MQTT if available
+        if mqtt_client:
+            mqtt_client.publish_display_state()
+        
+        return jsonify({'ok': True, 'on': bool(on)})
     except Exception:
         return jsonify({'error': 'internal'}), 500
 

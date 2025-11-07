@@ -111,6 +111,14 @@ class BasePlugin:
 
     def get_brightness(self) -> int:
         return 0
+    
+    def set_power(self, on: bool):
+        """Turn the display on or off."""
+        return
+    
+    def get_power(self) -> bool:
+        """Get the current power state."""
+        return True
 
     def play_animation_from_gif(self, path: str, speed: float = 1.0, loop: bool = True):
         # Generic GIF playback implementation using PIL. Runs in a background thread.
@@ -372,6 +380,9 @@ class WS2812Plugin(BasePlugin):
         try:
             from .ledmatrix import LEDMatrix as LegacyLEDMatrix
             self._impl = LegacyLEDMatrix(self.width, self.height)
+            # Initialize power state
+            self._impl._power_on = True
+            self._impl._saved_brightness = None
         except Exception:
             self._impl = None
 
@@ -440,6 +451,34 @@ class WS2812Plugin(BasePlugin):
             return int(self._impl.get_brightness())
         except Exception:
             return 0
+    
+    def set_power(self, on: bool):
+        if self._impl is None:
+            return
+        try:
+            if on:
+                # Turn on by setting brightness back to saved value
+                saved = getattr(self._impl, '_saved_brightness', None)
+                if saved is not None:
+                    self._impl.set_brightness(saved)
+                else:
+                    self._impl.set_brightness(25)  # Default brightness
+                self._impl._power_on = True
+            else:
+                # Save current brightness and turn off
+                self._impl._saved_brightness = self._impl.get_brightness()
+                self._impl.set_brightness(0)
+                self._impl._power_on = False
+        except Exception:
+            log.exception('set_power failed for WS2812Plugin')
+    
+    def get_power(self) -> bool:
+        if self._impl is None:
+            return True
+        try:
+            return getattr(self._impl, '_power_on', True)
+        except Exception:
+            return True
 
     def play_animation_from_gif(self, path: str, speed: float = 1.0, loop: bool = True):
         # prefer legacy implementation when available, otherwise use BasePlugin
@@ -490,6 +529,9 @@ class RGBMatrixPlugin(BasePlugin):
     def __init__(self, width: int, height: int, cfg: Optional[Dict[str, Any]] = None):
         super().__init__(width, height, cfg)
         self._hardware = None
+        # Initialize power state
+        self._power_on = True
+        self._saved_brightness = None
         # use a PIL image buffer when possible; fall back to list of hex strings
         if _HAVE_PIL:
             try:
@@ -715,6 +757,33 @@ class RGBMatrixPlugin(BasePlugin):
             except Exception:
                 log.exception('RGBMatrixPlugin get_brightness failed')
         return 100
+    
+    def set_power(self, on: bool):
+        """Turn the display on/off by controlling brightness."""
+        if self._hardware is None:
+            # Just track state even without hardware
+            self._power_on = on
+            return
+        try:
+            if on:
+                # Restore previous brightness
+                saved = getattr(self, '_saved_brightness', None)
+                if saved is not None:
+                    self._hardware.brightness = saved
+                else:
+                    self._hardware.brightness = 25  # Default
+                self._power_on = True
+            else:
+                # Save current brightness and turn off
+                self._saved_brightness = self._hardware.brightness
+                self._hardware.brightness = 0
+                self._power_on = False
+        except Exception:
+            log.exception('RGBMatrixPlugin set_power failed')
+    
+    def get_power(self) -> bool:
+        """Get current power state."""
+        return getattr(self, '_power_on', True)
 
     def show_volume_bar(self, volume: int, duration_ms: int = 1500, color: str = '#00FF00', mode: str = 'overlay'):
         """Display a temporary volume bar on the bottom row similar to legacy LEDMatrix.
@@ -919,6 +988,24 @@ class DisplayManager:
             except Exception:
                 return 100
         return 100
+
+    def set_power(self, on: bool):
+        """Turn the display on or off."""
+        if self._plugin:
+            try:
+                return self._plugin.set_power(on)
+            except Exception:
+                log.exception('set_power failed on plugin')
+    
+    def get_power(self) -> bool:
+        """Get the current power state."""
+        if self._plugin:
+            try:
+                return self._plugin.get_power()
+            except Exception:
+                log.exception('get_power failed on plugin')
+                return True
+        return True
 
     def play_animation_from_gif(self, path: str, speed: float = 1.0, loop: bool = True):
         if self._plugin:

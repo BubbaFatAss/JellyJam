@@ -8,30 +8,38 @@ import time
 
 
 class MQTTClient:
-    def __init__(self, config, nightlight=None):
+    def __init__(self, config, nightlight=None, display=None):
         """
         Initialize MQTT client.
         
         Args:
             config: MQTT configuration dict with broker, port, username, password, topic, discovery
             nightlight: NightLight instance to control
+            display: Display matrix instance to control
         """
         self.config = config
         self.nightlight = nightlight
+        self.display = display
         self.client = None
         self.connected = False
         self._stop_event = threading.Event()
         
-        # MQTT topics
+        # MQTT topics for nightlight
         self.base_topic = config.get('topic', 'jellyjam')
         self.light_state_topic = f"{self.base_topic}/light/state"
         self.light_command_topic = f"{self.base_topic}/light/set"
+        
+        # MQTT topics for display
+        self.display_state_topic = f"{self.base_topic}/display/state"
+        self.display_command_topic = f"{self.base_topic}/display/set"
+        
         self.availability_topic = f"{self.base_topic}/status"
         
         # Home Assistant Discovery
         self.discovery_enabled = config.get('discovery', True)
         self.discovery_prefix = 'homeassistant'
-        self.device_id = 'jellyjam_nightlight'
+        self.nightlight_device_id = 'jellyjam_nightlight'
+        self.display_device_id = 'jellyjam_display'
         
         self._init_client()
     
@@ -92,9 +100,14 @@ class MQTTClient:
                 retain=True
             )
             
-            # Subscribe to command topic
-            self.client.subscribe(self.light_command_topic)
-            print(f'Subscribed to {self.light_command_topic}')
+            # Subscribe to command topics
+            if self.nightlight:
+                self.client.subscribe(self.light_command_topic)
+                print(f'Subscribed to {self.light_command_topic}')
+            
+            if self.display:
+                self.client.subscribe(self.display_command_topic)
+                print(f'Subscribed to {self.display_command_topic}')
             
             # Send Home Assistant discovery message
             if self.discovery_enabled:
@@ -116,6 +129,8 @@ class MQTTClient:
         try:
             if msg.topic == self.light_command_topic:
                 self._handle_light_command(msg.payload.decode('utf-8'))
+            elif msg.topic == self.display_command_topic:
+                self._handle_display_command(msg.payload.decode('utf-8'))
         except Exception as e:
             print(f'Error handling MQTT message: {e}')
     
@@ -154,39 +169,95 @@ class MQTTClient:
         except Exception as e:
             print(f'Error handling light command: {e}')
     
-    def _send_discovery(self):
-        """Send Home Assistant MQTT Discovery message."""
+    def _handle_display_command(self, payload):
+        """Handle incoming display control commands from MQTT."""
         try:
-            # Discovery topic format: <discovery_prefix>/<component>/[<node_id>/]<object_id>/config
-            discovery_topic = f"{self.discovery_prefix}/light/{self.device_id}/config"
+            data = json.loads(payload)
             
-            # Build discovery payload
-            discovery_payload = {
-                "name": "JellyJam Nightlight",
-                "unique_id": self.device_id,
-                "state_topic": self.light_state_topic,
-                "command_topic": self.light_command_topic,
-                "availability_topic": self.availability_topic,
-                "schema": "json",
-                "brightness": True,
-                "brightness_scale": 255,
-                "rgb": True,
-                "device": {
-                    "identifiers": ["jellyjam"],
-                    "name": "JellyJam NFC Player",
-                    "model": "NFC Music Player with Nightlight",
-                    "manufacturer": "JellyJam"
+            if not self.display:
+                return
+            
+            # Handle state (ON/OFF)
+            if 'state' in data:
+                on = data['state'].upper() == 'ON'
+                self.display.set_power(on)
+            
+            # Handle brightness (0-100 scale for HA, converted to 0-255)
+            if 'brightness' in data:
+                brightness_100 = int(data['brightness'])
+                brightness_255 = int((brightness_100 / 100.0) * 255)
+                self.display.set_brightness(brightness_255)
+            
+            # Publish updated state
+            self.publish_display_state()
+            
+        except Exception as e:
+            print(f'Error handling display command: {e}')
+    
+    def _send_discovery(self):
+        """Send Home Assistant MQTT Discovery messages."""
+        try:
+            # Nightlight discovery
+            if self.nightlight:
+                nightlight_topic = f"{self.discovery_prefix}/light/{self.nightlight_device_id}/config"
+                
+                nightlight_payload = {
+                    "name": "JellyJam Nightlight",
+                    "unique_id": self.nightlight_device_id,
+                    "state_topic": self.light_state_topic,
+                    "command_topic": self.light_command_topic,
+                    "availability_topic": self.availability_topic,
+                    "schema": "json",
+                    "brightness": True,
+                    "brightness_scale": 255,
+                    "rgb": True,
+                    "device": {
+                        "identifiers": ["jellyjam"],
+                        "name": "JellyJam NFC Player",
+                        "model": "NFC Music Player with Nightlight",
+                        "manufacturer": "JellyJam"
+                    }
                 }
-            }
+                
+                self.client.publish(
+                    nightlight_topic,
+                    payload=json.dumps(nightlight_payload),
+                    qos=1,
+                    retain=True
+                )
+                
+                print(f'Sent Home Assistant discovery for nightlight to {nightlight_topic}')
             
-            self.client.publish(
-                discovery_topic,
-                payload=json.dumps(discovery_payload),
-                qos=1,
-                retain=True
-            )
-            
-            print(f'Sent Home Assistant discovery to {discovery_topic}')
+            # Display discovery
+            if self.display:
+                display_topic = f"{self.discovery_prefix}/light/{self.display_device_id}/config"
+                
+                display_payload = {
+                    "name": "JellyJam Display",
+                    "unique_id": self.display_device_id,
+                    "state_topic": self.display_state_topic,
+                    "command_topic": self.display_command_topic,
+                    "availability_topic": self.availability_topic,
+                    "schema": "json",
+                    "brightness": True,
+                    "brightness_scale": 100,
+                    "icon": "mdi:television",
+                    "device": {
+                        "identifiers": ["jellyjam"],
+                        "name": "JellyJam NFC Player",
+                        "model": "NFC Music Player with Nightlight",
+                        "manufacturer": "JellyJam"
+                    }
+                }
+                
+                self.client.publish(
+                    display_topic,
+                    payload=json.dumps(display_payload),
+                    qos=1,
+                    retain=True
+                )
+                
+                print(f'Sent Home Assistant discovery for display to {display_topic}')
             
         except Exception as e:
             print(f'Error sending Home Assistant discovery: {e}')
@@ -222,6 +293,34 @@ class MQTTClient:
         except Exception as e:
             print(f'Error publishing state: {e}')
     
+    def publish_display_state(self):
+        """Publish current display state to MQTT."""
+        try:
+            if not self.display or not self.connected:
+                return
+            
+            # Get display state
+            power_on = self.display.get_power()
+            brightness_255 = self.display.get_brightness()
+            
+            # Convert brightness to 0-100 scale for Home Assistant
+            brightness_100 = int((brightness_255 / 255.0) * 100)
+            
+            payload = {
+                "state": "ON" if power_on else "OFF",
+                "brightness": brightness_100
+            }
+            
+            self.client.publish(
+                self.display_state_topic,
+                payload=json.dumps(payload),
+                qos=1,
+                retain=True
+            )
+            
+        except Exception as e:
+            print(f'Error publishing display state: {e}')
+    
     def _hex_to_rgb(self, hex_color):
         """Convert hex color to RGB tuple."""
         hex_color = hex_color.lstrip('#')
@@ -253,13 +352,14 @@ class MQTTClient:
             print(f'Error disconnecting from MQTT: {e}')
 
 
-def create_mqtt_client(config, nightlight=None):
+def create_mqtt_client(config, nightlight=None, display=None):
     """
     Factory function to create and initialize MQTT client.
     
     Args:
         config: MQTT configuration dict
         nightlight: NightLight instance to control
+        display: Display matrix instance to control
     
     Returns:
         MQTTClient instance or None if disabled/error
@@ -268,11 +368,13 @@ def create_mqtt_client(config, nightlight=None):
         if not config.get('enabled'):
             return None
         
-        client = MQTTClient(config, nightlight)
+        client = MQTTClient(config, nightlight, display)
         
         # Register state change callback with nightlight
         if nightlight:
             nightlight.register_state_callback(client.publish_state_update)
+        
+        # TODO: Register state change callback with display when display has callback support
         
         return client
         
