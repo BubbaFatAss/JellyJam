@@ -9,6 +9,7 @@
   <button type="button" id="main-tab-lighting" class="tab-btn">Lighting</button>
   <button type="button" id="main-tab-artwork" class="tab-btn">Artwork</button>
   <button type="button" id="main-tab-mqtt" class="tab-btn">MQTT</button>
+  <button type="button" id="main-tab-logging" class="tab-btn">Logging</button>
 </div>
 
 <!-- Display Tab -->
@@ -233,17 +234,85 @@
   </form>
 </div>
 
+<!-- Logging Tab -->
+<div id="logging-tab-content" style="display:none;">
+  <h3>Logging Settings</h3>
+  <p style="margin-bottom:1rem;color:#666;">
+    Configure application logging level and view recent log entries.
+  </p>
+  
+  <form method="post" action="{{ url_for('save_logging_settings') }}">
+    <div>
+      <label for="log_level">Log Level</label>
+      <select id="log_level" name="log_level">
+        <option value="DEBUG" {% if logging_cfg.get('log_level', 'INFO') == 'DEBUG' %}selected{% endif %}>DEBUG (most verbose)</option>
+        <option value="INFO" {% if logging_cfg.get('log_level', 'INFO') == 'INFO' %}selected{% endif %}>INFO (normal)</option>
+        <option value="WARNING" {% if logging_cfg.get('log_level', 'INFO') == 'WARNING' %}selected{% endif %}>WARNING</option>
+        <option value="ERROR" {% if logging_cfg.get('log_level', 'INFO') == 'ERROR' %}selected{% endif %}>ERROR</option>
+        <option value="CRITICAL" {% if logging_cfg.get('log_level', 'INFO') == 'CRITICAL' %}selected{% endif %}>CRITICAL (least verbose)</option>
+      </select>
+      <small style="color:#666;">Minimum log level to record. Restart required for changes to take full effect.</small>
+    </div>
+    
+    <div>
+      <label for="display_lines">Display Lines</label>
+      <input type="number" id="display_lines" name="display_lines" min="10" max="10000" value="{{ logging_cfg.get('display_lines', 100) }}">
+      <small style="color:#666;">Number of recent log lines to display (10-10000)</small>
+    </div>
+    
+    <div>
+      <label for="buffer_capacity">Buffer Capacity</label>
+      <input type="number" id="buffer_capacity" name="buffer_capacity" min="100" max="100000" value="{{ logging_cfg.get('buffer_capacity', 1000) }}">
+      <small style="color:#666;">Maximum log entries to keep in memory (100-100000)</small>
+    </div>
+    
+    <div style="margin-top:1rem;">
+      <button type="submit">Save Logging Settings</button>
+      <a href="{{ url_for('settings') }}">Cancel</a>
+    </div>
+  </form>
+  
+  <hr style="margin:2rem 0;">
+  
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+    <h3 style="margin:0;">Live Log Viewer</h3>
+    <div>
+      <label style="margin-right:1rem;">
+        <input type="checkbox" id="auto-scroll" checked> Auto-scroll
+      </label>
+      <label style="margin-right:1rem;">
+        Filter:
+        <select id="log-filter-level">
+          <option value="0">ALL</option>
+          <option value="10">DEBUG+</option>
+          <option value="20" selected>INFO+</option>
+          <option value="30">WARNING+</option>
+          <option value="40">ERROR+</option>
+        </select>
+      </label>
+      <button type="button" id="refresh-logs" style="padding:0.3rem 0.8rem;">Refresh</button>
+      <button type="button" id="clear-logs" style="padding:0.3rem 0.8rem;background:#dc3545;">Clear</button>
+    </div>
+  </div>
+  
+  <div id="log-viewer" style="background:#1a1a1a;color:#d0d0d0;font-family:monospace;font-size:0.85rem;padding:1rem;height:500px;overflow-y:auto;border-radius:4px;white-space:pre-wrap;word-wrap:break-word;">
+    <div style="color:#888;text-align:center;padding:2rem;">Loading logs...</div>
+  </div>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function(){
-  // Main tab switching (Display vs Lighting vs Artwork vs MQTT)
+  // Main tab switching (Display vs Lighting vs Artwork vs MQTT vs Logging)
   const mainTabDisplay = document.getElementById('main-tab-display');
   const mainTabLighting = document.getElementById('main-tab-lighting');
   const mainTabArtwork = document.getElementById('main-tab-artwork');
   const mainTabMqtt = document.getElementById('main-tab-mqtt');
+  const mainTabLogging = document.getElementById('main-tab-logging');
   const displayTabContent = document.getElementById('display-tab-content');
   const lightingTabContent = document.getElementById('lighting-tab-content');
   const artworkTabContent = document.getElementById('artwork-tab-content');
   const mqttTabContent = document.getElementById('mqtt-tab-content');
+  const loggingTabContent = document.getElementById('logging-tab-content');
   
   function showMainTab(tab) {
     // Hide all tabs
@@ -251,10 +320,12 @@ document.addEventListener('DOMContentLoaded', function(){
     lightingTabContent.style.display = 'none';
     artworkTabContent.style.display = 'none';
     mqttTabContent.style.display = 'none';
+    loggingTabContent.style.display = 'none';
     mainTabDisplay.classList.remove('active');
     mainTabLighting.classList.remove('active');
     mainTabArtwork.classList.remove('active');
     mainTabMqtt.classList.remove('active');
+    mainTabLogging.classList.remove('active');
     
     // Show selected tab
     if (tab === 'lighting') {
@@ -267,6 +338,10 @@ document.addEventListener('DOMContentLoaded', function(){
     } else if (tab === 'mqtt') {
       mqttTabContent.style.display = '';
       mainTabMqtt.classList.add('active');
+    } else if (tab === 'logging') {
+      loggingTabContent.style.display = '';
+      mainTabLogging.classList.add('active');
+      startLogViewer();
     } else {
       displayTabContent.style.display = '';
       mainTabDisplay.classList.add('active');
@@ -277,6 +352,7 @@ document.addEventListener('DOMContentLoaded', function(){
   mainTabLighting.addEventListener('click', () => showMainTab('lighting'));
   mainTabArtwork.addEventListener('click', () => showMainTab('artwork'));
   mainTabMqtt.addEventListener('click', () => showMainTab('mqtt'));
+  mainTabLogging.addEventListener('click', () => showMainTab('logging'));
   
   // Load artwork cache info
   function loadArtworkInfo() {
@@ -396,6 +472,101 @@ document.addEventListener('DOMContentLoaded', function(){
     saveBtn.disabled = true;
     setTimeout(()=>{ saveBtn.disabled = false; }, 3000);
   });
+  
+  // ===== Logging Tab - Live Log Viewer =====
+  let logViewerInterval = null;
+  let lastLogCount = 0;
+  
+  function formatLogEntry(entry) {
+    const levelColors = {
+      'DEBUG': '#888',
+      'INFO': '#5bc0de',
+      'WARNING': '#f0ad4e',
+      'ERROR': '#d9534f',
+      'CRITICAL': '#ff0000'
+    };
+    const color = levelColors[entry.level] || '#d0d0d0';
+    const timestamp = new Date(entry.timestamp * 1000).toLocaleTimeString();
+    return `<span style="color:#666;">${timestamp}</span> <span style="color:${color};font-weight:bold;">${entry.level.padEnd(8)}</span> <span style="color:#aaa;">${entry.name}</span> - ${escapeHtml(entry.message)}`;
+  }
+  
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+  
+  function loadLogs() {
+    const displayLines = parseInt(document.getElementById('display_lines').value) || 100;
+    const filterLevel = parseInt(document.getElementById('log-filter-level').value) || 0;
+    const levelNames = {0: 'DEBUG', 10: 'DEBUG', 20: 'INFO', 30: 'WARNING', 40: 'ERROR'};
+    const levelName = levelNames[filterLevel] || 'DEBUG';
+    
+    fetch(`/api/logs?n=${displayLines}&level=${levelName}`)
+      .then(r => r.json())
+      .then(data => {
+        const viewer = document.getElementById('log-viewer');
+        const autoScroll = document.getElementById('auto-scroll').checked;
+        const wasScrolledToBottom = viewer.scrollHeight - viewer.clientHeight <= viewer.scrollTop + 1;
+        
+        if (data.logs && data.logs.length > 0) {
+          const html = data.logs.map(formatLogEntry).join('\n');
+          viewer.innerHTML = html;
+          lastLogCount = data.logs.length;
+          
+          // Auto-scroll to bottom if enabled and was already at bottom
+          if (autoScroll && (wasScrolledToBottom || lastLogCount === 0)) {
+            viewer.scrollTop = viewer.scrollHeight;
+          }
+        } else {
+          viewer.innerHTML = '<div style="color:#888;text-align:center;padding:2rem;">No log entries</div>';
+          lastLogCount = 0;
+        }
+      })
+      .catch(err => {
+        console.error('Error loading logs:', err);
+        document.getElementById('log-viewer').innerHTML = `<div style="color:#d9534f;text-align:center;padding:2rem;">Error loading logs: ${err.message}</div>`;
+      });
+  }
+  
+  function startLogViewer() {
+    // Load logs immediately
+    loadLogs();
+    
+    // Set up auto-refresh every 2 seconds
+    if (logViewerInterval) {
+      clearInterval(logViewerInterval);
+    }
+    logViewerInterval = setInterval(loadLogs, 2000);
+  }
+  
+  function stopLogViewer() {
+    if (logViewerInterval) {
+      clearInterval(logViewerInterval);
+      logViewerInterval = null;
+    }
+  }
+  
+  // Logging tab event handlers
+  if (document.getElementById('refresh-logs')) {
+    document.getElementById('refresh-logs').addEventListener('click', loadLogs);
+  }
+  
+  if (document.getElementById('clear-logs')) {
+    document.getElementById('clear-logs').addEventListener('click', function() {
+      if (confirm('Clear all log entries from memory? This cannot be undone.')) {
+        // TODO: Add API endpoint to clear logs
+        showToast('Log clearing not yet implemented', 2000);
+      }
+    });
+  }
+  
+  if (document.getElementById('log-filter-level')) {
+    document.getElementById('log-filter-level').addEventListener('change', loadLogs);
+  }
+  
+  // Stop log viewer when leaving the page
+  window.addEventListener('beforeunload', stopLogViewer);
 });
 </script>
 {% if saved %}

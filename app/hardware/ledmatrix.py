@@ -14,12 +14,14 @@ API:
 """
 from __future__ import annotations
 
-import logging
 import os
 from typing import List, Optional
 import threading
 import time
 from pathlib import Path
+from utils.logging_config import get_logger
+
+log = get_logger(__name__)
 
 try:
     from PIL import Image, ImageSequence
@@ -28,8 +30,6 @@ except Exception:
     Image = None
     ImageSequence = None
     _HAVE_PIL = False
-
-log = logging.getLogger(__name__)
 
 try:
     # Try rpi_ws281x if available (best-effort). We won't rely on any read

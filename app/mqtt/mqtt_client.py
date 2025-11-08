@@ -5,6 +5,9 @@ Handles MQTT communication including Home Assistant MQTT Discovery
 import json
 import threading
 import time
+from utils.logging_config import get_logger
+
+log = get_logger(__name__)
 
 
 class MQTTClient:
@@ -76,22 +79,22 @@ class MQTTClient:
             broker = self.config.get('broker', 'localhost')
             port = self.config.get('port', 1883)
             
-            print(f'Connecting to MQTT broker at {broker}:{port}...')
+            log.info('Connecting to MQTT broker at %s:%d...', broker, port)
             self.client.connect(broker, port, keepalive=60)
             
             # Start network loop in background thread
             self.client.loop_start()
             
         except ImportError:
-            print('Warning: paho-mqtt not installed. MQTT features disabled.')
-            print('Install with: pip install paho-mqtt')
+            log.warning('paho-mqtt not installed. MQTT features disabled.')
+            log.info('Install with: pip install paho-mqtt')
         except Exception as e:
-            print(f'Error initializing MQTT client: {e}')
+            log.error('Error initializing MQTT client: %s', e)
     
     def _on_connect(self, client, userdata, flags, rc):
         """Callback when connected to MQTT broker."""
         if rc == 0:
-            print('Connected to MQTT broker')
+            log.info('Connected to MQTT broker')
             self.connected = True
             
             # Publish availability
@@ -105,11 +108,11 @@ class MQTTClient:
             # Subscribe to command topics
             if self.nightlight:
                 self.client.subscribe(self.light_command_topic)
-                print(f'Subscribed to {self.light_command_topic}')
+                log.info('Subscribed to %s', self.light_command_topic)
             
             if self.display:
                 self.client.subscribe(self.display_command_topic)
-                print(f'Subscribed to {self.display_command_topic}')
+                log.info('Subscribed to %s', self.display_command_topic)
             
             # Send Home Assistant discovery message
             if self.discovery_enabled:
@@ -119,13 +122,13 @@ class MQTTClient:
             self._publish_state()
             self.publish_display_state()
         else:
-            print(f'Failed to connect to MQTT broker, return code {rc}')
+            log.error('Failed to connect to MQTT broker, return code %d', rc)
     
     def _on_disconnect(self, client, userdata, rc):
         """Callback when disconnected from MQTT broker."""
         self.connected = False
         if rc != 0:
-            print(f'Unexpected MQTT disconnection (rc={rc}). Reconnecting...')
+            log.warning('Unexpected MQTT disconnection (rc=%d). Reconnecting...', rc)
     
     def _on_message(self, client, userdata, msg):
         """Callback when a message is received."""
@@ -135,7 +138,7 @@ class MQTTClient:
             elif msg.topic == self.display_command_topic:
                 self._handle_display_command(msg.payload.decode('utf-8'))
         except Exception as e:
-            print(f'Error handling MQTT message: {e}')
+            log.error('Error handling MQTT message: %s', e)
     
     def _handle_light_command(self, payload):
         """Handle incoming light control commands from MQTT."""
@@ -172,36 +175,36 @@ class MQTTClient:
             # Emit Socket.IO update for web UI
             if self.socketio and self.nightlight:
                 state = self.nightlight.get_state()
-                print(f'Emitting nightlight_update via Socket.IO: {state}')
+                log.debug('Emitting nightlight_update via Socket.IO: %s', state)
                 self.socketio.emit('nightlight_update', state)
             
         except Exception as e:
-            print(f'Error handling light command: {e}')
+            log.error('Error handling light command: %s', e)
     
     def _handle_display_command(self, payload):
         """Handle incoming display control commands from MQTT."""
         try:
             data = json.loads(payload)
-            print(f'Received display MQTT command: {data}')
+            log.debug('Received display MQTT command: %s', data)
             
             if not self.display:
-                print('Cannot handle display command: display is None')
+                log.warning('Cannot handle display command: display is None')
                 return
             
             # Handle state (ON/OFF)
             if 'state' in data:
                 on = data['state'].upper() == 'ON'
-                print(f'Setting display power to: {on}')
+                log.debug('Setting display power to: %s', on)
                 self.display.set_power(on)
             
             # Handle brightness (0-100 scale, matches display internal range)
             if 'brightness' in data:
                 brightness = int(data['brightness'])
-                print(f'Setting display brightness to: {brightness}')
+                log.debug('Setting display brightness to: %d', brightness)
                 self.display.set_brightness(brightness)
             
             # Publish updated state
-            print('Publishing updated display state back to MQTT...')
+            log.debug('Publishing updated display state back to MQTT...')
             self.publish_display_state()
             
             # Emit Socket.IO update for web UI
@@ -210,16 +213,14 @@ class MQTTClient:
                     'on': self.display.get_power(),
                     'brightness': self.display.get_brightness()
                 }
-                print(f'Emitting display_power_update via Socket.IO: {display_state}')
+                log.debug('Emitting display_power_update via Socket.IO: %s', display_state)
                 self.socketio.emit('display_power_update', display_state)
             else:
                 if not self.socketio:
-                    print('Cannot emit Socket.IO update: socketio is None')
+                    log.debug('Cannot emit Socket.IO update: socketio is None')
             
         except Exception as e:
-            print(f'Error handling display command: {e}')
-            import traceback
-            traceback.print_exc()
+            log.error('Error handling display command: %s', e, exc_info=True)
     
     def _send_discovery(self):
         """Send Home Assistant MQTT Discovery messages."""
@@ -254,7 +255,7 @@ class MQTTClient:
                     retain=True
                 )
                 
-                print(f'Sent Home Assistant discovery for nightlight to {nightlight_topic}')
+                log.info('Sent Home Assistant discovery for nightlight to %s', nightlight_topic)
             
             # Display discovery
             if self.display:
@@ -285,10 +286,10 @@ class MQTTClient:
                     retain=True
                 )
                 
-                print(f'Sent Home Assistant discovery for display to {display_topic}')
+                log.info('Sent Home Assistant discovery for display to %s', display_topic)
             
         except Exception as e:
-            print(f'Error sending Home Assistant discovery: {e}')
+            log.error('Error sending Home Assistant discovery: %s', e)
     
     def _publish_state(self):
         """Publish current nightlight state to MQTT."""
@@ -320,16 +321,16 @@ class MQTTClient:
             )
             
         except Exception as e:
-            print(f'Error publishing state: {e}')
+            log.error('Error publishing state: %s', e)
     
     def publish_display_state(self):
         """Publish current display state to MQTT."""
         try:
             if not self.display or not self.connected:
                 if not self.display:
-                    print('Display state not published: display is None')
+                    log.debug('Display state not published: display is None')
                 if not self.connected:
-                    print('Display state not published: not connected to MQTT')
+                    log.debug('Display state not published: not connected to MQTT')
                 return
             
             # Get display state
@@ -341,9 +342,9 @@ class MQTTClient:
                 "brightness": brightness_100
             }
             
-            print(f'Publishing display state to {self.display_state_topic}: {payload}')
-            print(f'  Display object: {self.display}')
-            print(f'  Power: {power_on}, Brightness: {brightness_100}')
+            log.debug('Publishing display state to %s: %s', self.display_state_topic, payload)
+            log.debug('  Display object: %s', self.display)
+            log.debug('  Power: %s, Brightness: %d', power_on, brightness_100)
             
             self.client.publish(
                 self.display_state_topic,
@@ -353,9 +354,7 @@ class MQTTClient:
             )
             
         except Exception as e:
-            print(f'Error publishing display state: {e}')
-            import traceback
-            traceback.print_exc()
+            log.error('Error publishing display state: %s', e, exc_info=True)
     
     def _hex_to_rgb(self, hex_color):
         """Convert hex color to RGB tuple."""
@@ -383,9 +382,9 @@ class MQTTClient:
                 
                 self.client.loop_stop()
                 self.client.disconnect()
-                print('Disconnected from MQTT broker')
+                log.info('Disconnected from MQTT broker')
         except Exception as e:
-            print(f'Error disconnecting from MQTT: {e}')
+            log.error('Error disconnecting from MQTT: %s', e)
 
 
 def create_mqtt_client(config, nightlight=None, display=None, socketio=None):
@@ -416,6 +415,5 @@ def create_mqtt_client(config, nightlight=None, display=None, socketio=None):
         return client
         
     except Exception as e:
-        print(f'Failed to create MQTT client: {e}')
-        return None
+        log.error('Failed to create MQTT client: %s', e)
         return None

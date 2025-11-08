@@ -5,6 +5,9 @@ Controls an LED strip for ambient lighting (separate from the display matrix)
 import os
 import threading
 import time
+from utils.logging_config import get_logger
+
+log = get_logger(__name__)
 
 
 class NightLight:
@@ -32,10 +35,10 @@ class NightLight:
         # Try to initialize the LED strip
         try:
             self._init_strip()
-            print(f'Nightlight initialized: {self.num_leds} LEDs on GPIO {self.gpio_pin}')
+            log.info('Nightlight initialized: %d LEDs on GPIO %d', self.num_leds, self.gpio_pin)
         except Exception as e:
-            print(f'Warning: Could not initialize nightlight hardware: {e}')
-            print('Nightlight will run in simulation mode')
+            log.warning('Could not initialize nightlight hardware: %s', e)
+            log.info('Nightlight will run in simulation mode')
     
     def _init_strip(self):
         """Initialize the WS2812B LED strip using rpi_ws281x library."""
@@ -68,7 +71,7 @@ class NightLight:
             # rpi_ws281x not available, run in simulation mode
             pass
         except Exception as e:
-            print(f'Error initializing WS2812B strip: {e}')
+            log.error('Error initializing WS2812B strip: %s', e)
             raise
     
     def _hex_to_rgb(self, hex_color):
@@ -175,7 +178,7 @@ class NightLight:
             try:
                 callback(state)
             except Exception as e:
-                print(f'Error in nightlight state callback: {e}')
+                log.error('Error in nightlight state callback: %s', e)
     
     def cleanup(self):
         """Clean up resources."""

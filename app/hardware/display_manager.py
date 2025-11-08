@@ -14,14 +14,14 @@ delegating to the active plugin.
 """
 from __future__ import annotations
 
-import logging
 import json
 import threading
 import time
 from typing import Optional, Dict, Any, List
 from pathlib import Path
+from utils.logging_config import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 try:
     from PIL import Image

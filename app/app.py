@@ -1,10 +1,18 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify, send_from_directory
 from flask import session
-from player.player import Player
-from nfc.reader import NFCReader
-from storage import Storage
 import os
 import json
+import logging
+
+from utils.logging_config import setup_logging, get_logger, get_recent_logs, set_log_level
+from storage import Storage
+from player.player import Player
+from nfc.reader import NFCReader
+
+# Initialize logging with defaults first (before any storage access)
+setup_logging(level=logging.INFO, buffer_capacity=1000)
+log = get_logger(__name__)
+
 try:
     from flask_socketio import SocketIO
     _HAVE_SOCKETIO = True
@@ -29,9 +37,32 @@ try:
         Talisman(app, content_security_policy=None)
 except Exception:
     pass
+
+# NOW initialize storage and load config
 data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
 os.makedirs(data_dir, exist_ok=True)
 storage = Storage(os.path.join(data_dir, 'config.json'))
+
+# Update logging level from config if available
+try:
+    cfg = storage.load() or {}
+    logging_cfg = cfg.get('logging', {})
+    if logging_cfg:
+        log_level_name = logging_cfg.get('log_level', 'INFO')
+        log_level = getattr(logging, log_level_name, logging.INFO)
+        buffer_capacity = logging_cfg.get('buffer_capacity', 1000)
+        # Update logging configuration
+        set_log_level(log_level)
+        from utils.logging_config import get_log_buffer
+        buffer = get_log_buffer()
+        if buffer:
+            buffer.set_capacity(buffer_capacity)
+        log.info('JellyJam starting up with log level: %s', log_level_name)
+    else:
+        log.info('JellyJam starting up with log level: INFO (default)')
+except Exception as e:
+    log.warning('Failed to load logging config from storage: %s', e)
+    log.info('JellyJam starting up with log level: INFO (default)')
 
 player = Player(storage)
 nfc = NFCReader(callback=player.handle_nfc)
@@ -42,13 +73,13 @@ mqtt_client = None
 try:
     from hardware.nightlight import NightLight
     # Load lighting config from storage
-    cfg = storage.load() or {}
-    lighting_cfg = cfg.get('lighting', {})
+    lighting_cfg_data = storage.load() or {}
+    lighting_cfg = lighting_cfg_data.get('lighting', {})
     gpio_pin = lighting_cfg.get('gpio_pin')  # None means use default/env var
     led_count = lighting_cfg.get('led_count')  # None means use default/env var
     nightlight = NightLight(num_leds=led_count, gpio_pin=gpio_pin)
 except Exception as e:
-    print(f'Warning: Nightlight initialization failed: {e}')
+    log.warning('Nightlight initialization failed: %s', e)
 
 # Initialize MQTT client if configured
 def init_mqtt():
@@ -62,9 +93,9 @@ def init_mqtt():
             from mqtt.mqtt_client import create_mqtt_client
             mqtt_client = create_mqtt_client(mqtt_cfg, nightlight, matrix, socketio)
             if mqtt_client:
-                print('MQTT client initialized')
+                log.info('MQTT client initialized')
     except Exception as e:
-        print(f'Warning: MQTT initialization failed: {e}')
+        log.warning('MQTT initialization failed: %s', e)
 
 # Note: MQTT initialization is deferred until after matrix is created (see below)
 
@@ -553,7 +584,10 @@ def settings():
     # Get Lighting config
     lighting_cfg = cfg.get('lighting', {})
     
-    return render_template('settings.html', display_cfg=disp, saved=saved_flag, plugins_json=plugins_json, mqtt_cfg=mqtt_cfg, lighting_cfg=lighting_cfg)
+    # Get Logging config
+    logging_cfg = cfg.get('logging', {})
+    
+    return render_template('settings.html', display_cfg=disp, saved=saved_flag, plugins_json=plugins_json, mqtt_cfg=mqtt_cfg, lighting_cfg=lighting_cfg, logging_cfg=logging_cfg)
 
 @app.route('/api/artwork/info', methods=['GET'])
 def artwork_info():
@@ -628,7 +662,7 @@ def save_mqtt_settings():
                 mqtt_client = None
             init_mqtt()
         except Exception as e:
-            print(f'Error restarting MQTT client: {e}')
+            log.error('Error restarting MQTT client: %s', e)
         
         return redirect(url_for('settings', saved=1))
     except Exception as e:
@@ -660,6 +694,54 @@ def save_lighting_settings():
         
         return redirect(url_for('settings', saved=1))
     except Exception as e:
+        return redirect(url_for('settings', error=str(e)))
+
+@app.route('/settings/logging', methods=['POST'])
+def save_logging_settings():
+    """Save logging configuration."""
+    try:
+        cfg = storage.load() or {}
+        
+        # Get form data
+        log_level_name = request.form.get('log_level', 'INFO').upper()
+        display_lines = int(request.form.get('display_lines', 100))
+        buffer_capacity = int(request.form.get('buffer_capacity', 1000))
+        
+        # Validate inputs
+        valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+        if log_level_name not in valid_levels:
+            return redirect(url_for('settings', error=f'Invalid log level. Must be one of: {", ".join(valid_levels)}'))
+        
+        if display_lines < 10 or display_lines > 10000:
+            return redirect(url_for('settings', error='Display lines must be between 10 and 10000'))
+        
+        if buffer_capacity < 100 or buffer_capacity > 100000:
+            return redirect(url_for('settings', error='Buffer capacity must be between 100 and 100000'))
+        
+        # Save configuration
+        logging_cfg = {
+            'log_level': log_level_name,
+            'display_lines': display_lines,
+            'buffer_capacity': buffer_capacity
+        }
+        
+        cfg['logging'] = logging_cfg
+        storage.save(cfg)
+        
+        # Apply new log level immediately
+        new_level = getattr(logging, log_level_name, logging.INFO)
+        set_log_level(new_level)
+        log.info('Log level changed to %s', log_level_name)
+        
+        # Update buffer capacity
+        from utils.logging_config import get_log_buffer
+        buffer = get_log_buffer()
+        if buffer:
+            buffer.set_capacity(buffer_capacity)
+        
+        return redirect(url_for('settings', saved=1))
+    except Exception as e:
+        log.error('Error saving logging settings: %s', e, exc_info=True)
         return redirect(url_for('settings', error=str(e)))
 
 # create LED matrix mirror (in-memory buffer, hardware-backed when available)
@@ -793,7 +875,7 @@ except Exception:
 try:
     init_mqtt()
 except Exception as e:
-    print(f'Warning: Could not initialize MQTT: {e}')
+    log.warning('Could not initialize MQTT: %s', e)
 
 # ensure animations dir exists
 try:
@@ -1594,6 +1676,31 @@ def api_socketio_client():
     return jsonify({'cdn': url})
 
 
+@app.route('/api/logs')
+def api_logs():
+    """Return recent log entries."""
+    try:
+        # Get query parameters
+        n = request.args.get('n', default=100, type=int)
+        min_level_name = request.args.get('level', default='DEBUG', type=str).upper()
+        
+        # Convert level name to number
+        min_level = getattr(logging, min_level_name, logging.DEBUG)
+        
+        # Get logs from buffer
+        logs = get_recent_logs(n=n, min_level=min_level)
+        
+        return jsonify({
+            'logs': logs,
+            'count': len(logs),
+            'requested': n,
+            'min_level': min_level_name
+        })
+    except Exception as e:
+        log.error('Error retrieving logs: %s', e, exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 if _HAVE_SOCKETIO:
     @socketio.on('connect')
     def _ws_connect():
@@ -2248,8 +2355,7 @@ try:
 
 except Exception:
     # Audiobooks module not available; routes will not be registered
-    import logging
-    logging.exception('Audiobooks module failed to load; audiobooks features disabled')
+    log.exception('Audiobooks module failed to load; audiobooks features disabled')
 
 
 if __name__ == '__main__':
