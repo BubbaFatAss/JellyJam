@@ -610,7 +610,10 @@ def settings():
     # Get Logging config
     logging_cfg = cfg.get('logging', {})
     
-    return render_template('settings.html', display_cfg=disp, saved=saved_flag, plugins_json=plugins_json, mqtt_cfg=mqtt_cfg, lighting_cfg=lighting_cfg, logging_cfg=logging_cfg)
+    # Get Controls config
+    controls_cfg = cfg.get('controls', {})
+    
+    return render_template('settings.html', display_cfg=disp, saved=saved_flag, plugins_json=plugins_json, mqtt_cfg=mqtt_cfg, lighting_cfg=lighting_cfg, logging_cfg=logging_cfg, controls_cfg=controls_cfg)
 
 @app.route('/api/artwork/info', methods=['GET'])
 def artwork_info():
@@ -795,6 +798,91 @@ def save_logging_settings():
         log.error('Error saving logging settings: %s', e, exc_info=True)
         return redirect(url_for('settings', error=str(e)))
 
+
+@app.route('/settings/controls', methods=['POST'])
+def save_controls_settings():
+    """Save controls configuration (rotary encoders)."""
+    try:
+        cfg = storage.load() or {}
+        
+        # Rotary Encoder 1 (Volume) settings
+        rotary1_enabled = request.form.get('rotary1_enabled') == 'on'
+        rotary1_a_pin = request.form.get('rotary1_a_pin', '').strip()
+        rotary1_b_pin = request.form.get('rotary1_b_pin', '').strip()
+        rotary1_button_pin = request.form.get('rotary1_button_pin', '').strip()
+        
+        # Rotary Encoder 2 (Skip/Brightness) settings
+        rotary2_enabled = request.form.get('rotary2_enabled') == 'on'
+        rotary2_a_pin = request.form.get('rotary2_a_pin', '').strip()
+        rotary2_b_pin = request.form.get('rotary2_b_pin', '').strip()
+        rotary2_button_pin = request.form.get('rotary2_button_pin', '').strip()
+        
+        # Validate pin numbers
+        def validate_pin(pin_str, name):
+            if pin_str:
+                try:
+                    pin = int(pin_str)
+                    if pin < 0 or pin > 40:
+                        return f'{name} must be between 0 and 40'
+                except ValueError:
+                    return f'{name} must be a valid number'
+            return None
+        
+        # Validate all pins
+        errors = []
+        if rotary1_enabled:
+            if not rotary1_a_pin or not rotary1_b_pin:
+                errors.append('Rotary 1: Both A and B pins are required')
+            else:
+                err = validate_pin(rotary1_a_pin, 'Rotary 1 Pin A')
+                if err: errors.append(err)
+                err = validate_pin(rotary1_b_pin, 'Rotary 1 Pin B')
+                if err: errors.append(err)
+            if rotary1_button_pin:
+                err = validate_pin(rotary1_button_pin, 'Rotary 1 Button Pin')
+                if err: errors.append(err)
+        
+        if rotary2_enabled:
+            if not rotary2_a_pin or not rotary2_b_pin:
+                errors.append('Rotary 2: Both A and B pins are required')
+            else:
+                err = validate_pin(rotary2_a_pin, 'Rotary 2 Pin A')
+                if err: errors.append(err)
+                err = validate_pin(rotary2_b_pin, 'Rotary 2 Pin B')
+                if err: errors.append(err)
+            if rotary2_button_pin:
+                err = validate_pin(rotary2_button_pin, 'Rotary 2 Button Pin')
+                if err: errors.append(err)
+        
+        if errors:
+            return redirect(url_for('settings', error='; '.join(errors)))
+        
+        # Save configuration
+        controls_cfg = {
+            'rotary1': {
+                'enabled': rotary1_enabled,
+                'a_pin': int(rotary1_a_pin) if rotary1_a_pin else None,
+                'b_pin': int(rotary1_b_pin) if rotary1_b_pin else None,
+                'button_pin': int(rotary1_button_pin) if rotary1_button_pin else None
+            },
+            'rotary2': {
+                'enabled': rotary2_enabled,
+                'a_pin': int(rotary2_a_pin) if rotary2_a_pin else None,
+                'b_pin': int(rotary2_b_pin) if rotary2_b_pin else None,
+                'button_pin': int(rotary2_button_pin) if rotary2_button_pin else None
+            }
+        }
+        
+        cfg['controls'] = controls_cfg
+        storage.save(cfg)
+        
+        log.info('Controls settings saved. Restart required for changes to take effect.')
+        
+        return redirect(url_for('settings', saved=1))
+    except Exception as e:
+        log.error('Error saving controls settings: %s', e, exc_info=True)
+        return redirect(url_for('settings', error=str(e)))
+
 # create LED matrix mirror (in-memory buffer, hardware-backed when available)
 try:
     # Use new display manager which supports multiple plugin backends.
@@ -894,8 +982,8 @@ try:
                 if not os.path.exists(startup_path):
                     try:
                         from PIL import Image, ImageDraw
-                        w = int(os.environ.get('LED_WIDTH', '16'))
-                        h = int(os.environ.get('LED_HEIGHT', '16'))
+                        w = int(os.environ.get('LED_WIDTH', str(matrix.width if matrix is not None else 16)))
+                        h = int(os.environ.get('LED_HEIGHT', str(matrix.height if matrix is not None else 16)))
                         frames = []
                         # create 6 frames with a simple sweeping dot
                         for i in range(6):
@@ -948,18 +1036,26 @@ except Exception:
     pass
 
 
-# Optional rotary encoder support: if ROTARY_A_PIN and ROTARY_B_PIN are set
-# we'll create a background reader that calls back with detent deltas.
+# Optional rotary encoder support: check config for pin settings
+# Fallback to environment variables for backward compatibility
 try:
     import os
-    a_pin = os.environ.get('ROTARY_A_PIN')
-    b_pin = os.environ.get('ROTARY_B_PIN')
-    if a_pin and b_pin:
+    
+    # Load controls config
+    controls_cfg = storage.load().get('controls', {}) if storage else {}
+    rotary1_cfg = controls_cfg.get('rotary1', {})
+    rotary2_cfg = controls_cfg.get('rotary2', {})
+    
+    # Rotary 1 (Volume control)
+    # Try config first, fallback to environment variables
+    rotary1_enabled = rotary1_cfg.get('enabled', False)
+    a_pin = rotary1_cfg.get('a_pin') or os.environ.get('ROTARY_A_PIN')
+    b_pin = rotary1_cfg.get('b_pin') or os.environ.get('ROTARY_B_PIN')
+    bbtn = rotary1_cfg.get('button_pin') or os.environ.get('ROTARY_BUTTON_PIN')
+    
+    if (rotary1_enabled or a_pin) and a_pin and b_pin:
         try:
             from .hardware.rotary import create_rotary
-
-            # optional button for volume encoder
-            bbtn = os.environ.get('ROTARY_BUTTON_PIN')
 
             def _rotary_volume_delta(delta):
                 try:
@@ -992,15 +1088,20 @@ try:
 
             rotary = create_rotary(int(a_pin), int(b_pin), _rotary_volume_delta, button_pin=(int(bbtn) if bbtn else None), button_callback=(_rotary_volume_button if bbtn else None))
             rotary.start()
-        except Exception:
+            log.info('Rotary encoder 1 (volume) started on pins A=%s, B=%s', a_pin, b_pin)
+        except Exception as e:
             # don't fail startup if rotary cannot be started
-            pass
-    # support a second encoder for skipping tracks
-    try:
-        a2 = os.environ.get('ROTARY2_A_PIN')
-        b2 = os.environ.get('ROTARY2_B_PIN')
-        btn2 = os.environ.get('ROTARY2_BUTTON_PIN')
-        if a2 and b2:
+            log.warning('Failed to start rotary encoder 1: %s', e)
+    
+    # Rotary 2 (Skip/Brightness control)
+    # Try config first, fallback to environment variables
+    rotary2_enabled = rotary2_cfg.get('enabled', False)
+    a2 = rotary2_cfg.get('a_pin') or os.environ.get('ROTARY2_A_PIN')
+    b2 = rotary2_cfg.get('b_pin') or os.environ.get('ROTARY2_B_PIN')
+    btn2 = rotary2_cfg.get('button_pin') or os.environ.get('ROTARY2_BUTTON_PIN')
+    
+    if (rotary2_enabled or a2) and a2 and b2:
+        try:
             from .hardware.rotary import create_rotary
 
             def _rotary_skip_delta(delta):
@@ -1045,10 +1146,11 @@ try:
 
             rotary2 = create_rotary(int(a2), int(b2), _rotary_skip_delta, button_pin=(int(btn2) if btn2 else None), button_callback=(_rotary_skip_button if btn2 else None))
             rotary2.start()
-    except Exception:
-        pass
-except Exception:
-    pass
+            log.info('Rotary encoder 2 (skip/brightness) started on pins A=%s, B=%s', a2, b2)
+        except Exception as e:
+            log.warning('Failed to start rotary encoder 2: %s', e)
+except Exception as e:
+    log.warning('Failed to initialize rotary encoders: %s', e)
 
 
 @app.route('/')

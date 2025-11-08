@@ -10,6 +10,7 @@
   <button type="button" id="main-tab-artwork" class="tab-btn">Artwork</button>
   <button type="button" id="main-tab-mqtt" class="tab-btn">MQTT</button>
   <button type="button" id="main-tab-logging" class="tab-btn">Logging</button>
+  <button type="button" id="main-tab-controls" class="tab-btn">Controls</button>
 </div>
 
 <!-- Display Tab -->
@@ -328,19 +329,116 @@
   </div>
 </div>
 
+<!-- Controls Tab -->
+<div id="controls-tab-content" style="display:none;">
+  <h3>Controls Settings</h3>
+  <p style="margin-bottom:1rem;color:#666;">
+    Configure hardware input controls like rotary encoders. Changes require application restart to take effect.
+  </p>
+  
+  <form method="post" action="{{ url_for('save_controls_settings') }}">
+    <h4 style="margin-top:1.5rem;margin-bottom:0.5rem;">Rotary Encoder 1 (Volume Control)</h4>
+    <p style="margin-bottom:1rem;color:#666;font-size:0.9rem;">
+      Controls volume adjustment. Optional button for play/pause toggle.
+    </p>
+    
+    <div>
+      <label for="rotary1_enabled">
+        <input type="checkbox" id="rotary1_enabled" name="rotary1_enabled" 
+               {% if controls_cfg.get('rotary1', {}).get('enabled', False) %}checked{% endif %}>
+        Enable Rotary Encoder 1
+      </label>
+    </div>
+    
+    <div>
+      <label for="rotary1_a_pin">Pin A (CLK)</label>
+      <input type="number" id="rotary1_a_pin" name="rotary1_a_pin" min="0" max="40" 
+             value="{{ controls_cfg.get('rotary1', {}).get('a_pin', '') }}" 
+             placeholder="e.g., 17">
+      <small style="color:#666;">GPIO pin for encoder channel A (BCM numbering)</small>
+    </div>
+    
+    <div>
+      <label for="rotary1_b_pin">Pin B (DT)</label>
+      <input type="number" id="rotary1_b_pin" name="rotary1_b_pin" min="0" max="40" 
+             value="{{ controls_cfg.get('rotary1', {}).get('b_pin', '') }}" 
+             placeholder="e.g., 18">
+      <small style="color:#666;">GPIO pin for encoder channel B (BCM numbering)</small>
+    </div>
+    
+    <div>
+      <label for="rotary1_button_pin">Button Pin (Optional)</label>
+      <input type="number" id="rotary1_button_pin" name="rotary1_button_pin" min="0" max="40" 
+             value="{{ controls_cfg.get('rotary1', {}).get('button_pin', '') }}" 
+             placeholder="e.g., 27">
+      <small style="color:#666;">GPIO pin for encoder push button (leave empty if not used)</small>
+    </div>
+    
+    <hr style="margin:1.5rem 0;border:none;border-top:1px solid #ddd;">
+    
+    <h4 style="margin-bottom:0.5rem;">Rotary Encoder 2 (Skip/Brightness Control)</h4>
+    <p style="margin-bottom:1rem;color:#666;font-size:0.9rem;">
+      Controls track skipping. Button toggles between skip mode and brightness adjustment mode.
+    </p>
+    
+    <div>
+      <label for="rotary2_enabled">
+        <input type="checkbox" id="rotary2_enabled" name="rotary2_enabled" 
+               {% if controls_cfg.get('rotary2', {}).get('enabled', False) %}checked{% endif %}>
+        Enable Rotary Encoder 2
+      </label>
+    </div>
+    
+    <div>
+      <label for="rotary2_a_pin">Pin A (CLK)</label>
+      <input type="number" id="rotary2_a_pin" name="rotary2_a_pin" min="0" max="40" 
+             value="{{ controls_cfg.get('rotary2', {}).get('a_pin', '') }}" 
+             placeholder="e.g., 22">
+      <small style="color:#666;">GPIO pin for encoder channel A (BCM numbering)</small>
+    </div>
+    
+    <div>
+      <label for="rotary2_b_pin">Pin B (DT)</label>
+      <input type="number" id="rotary2_b_pin" name="rotary2_b_pin" min="0" max="40" 
+             value="{{ controls_cfg.get('rotary2', {}).get('b_pin', '') }}" 
+             placeholder="e.g., 23">
+      <small style="color:#666;">GPIO pin for encoder channel B (BCM numbering)</small>
+    </div>
+    
+    <div>
+      <label for="rotary2_button_pin">Button Pin (Optional)</label>
+      <input type="number" id="rotary2_button_pin" name="rotary2_button_pin" min="0" max="40" 
+             value="{{ controls_cfg.get('rotary2', {}).get('button_pin', '') }}" 
+             placeholder="e.g., 24">
+      <small style="color:#666;">GPIO pin for encoder push button (toggles skip/brightness mode)</small>
+    </div>
+    
+    <div style="margin-top:1.5rem;padding:1rem;background:#f8f9fa;border-radius:4px;">
+      <strong>⚠️ Important:</strong> Application restart required for control changes to take effect.
+    </div>
+    
+    <div style="margin-top:1rem;">
+      <button type="submit">Save Controls Settings</button>
+      <a href="{{ url_for('settings') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function(){
-  // Main tab switching (Display vs Lighting vs Artwork vs MQTT vs Logging)
+  // Main tab switching (Display vs Lighting vs Artwork vs MQTT vs Logging vs Controls)
   const mainTabDisplay = document.getElementById('main-tab-display');
   const mainTabLighting = document.getElementById('main-tab-lighting');
   const mainTabArtwork = document.getElementById('main-tab-artwork');
   const mainTabMqtt = document.getElementById('main-tab-mqtt');
   const mainTabLogging = document.getElementById('main-tab-logging');
+  const mainTabControls = document.getElementById('main-tab-controls');
   const displayTabContent = document.getElementById('display-tab-content');
   const lightingTabContent = document.getElementById('lighting-tab-content');
   const artworkTabContent = document.getElementById('artwork-tab-content');
   const mqttTabContent = document.getElementById('mqtt-tab-content');
   const loggingTabContent = document.getElementById('logging-tab-content');
+  const controlsTabContent = document.getElementById('controls-tab-content');
   
   function showMainTab(tab) {
     // Hide all tabs
@@ -349,11 +447,13 @@ document.addEventListener('DOMContentLoaded', function(){
     artworkTabContent.style.display = 'none';
     mqttTabContent.style.display = 'none';
     loggingTabContent.style.display = 'none';
+    controlsTabContent.style.display = 'none';
     mainTabDisplay.classList.remove('active');
     mainTabLighting.classList.remove('active');
     mainTabArtwork.classList.remove('active');
     mainTabMqtt.classList.remove('active');
     mainTabLogging.classList.remove('active');
+    mainTabControls.classList.remove('active');
     
     // Show selected tab
     if (tab === 'lighting') {
@@ -370,6 +470,9 @@ document.addEventListener('DOMContentLoaded', function(){
       loggingTabContent.style.display = '';
       mainTabLogging.classList.add('active');
       startLogViewer();
+    } else if (tab === 'controls') {
+      controlsTabContent.style.display = '';
+      mainTabControls.classList.add('active');
     } else {
       displayTabContent.style.display = '';
       mainTabDisplay.classList.add('active');
@@ -381,6 +484,7 @@ document.addEventListener('DOMContentLoaded', function(){
   mainTabArtwork.addEventListener('click', () => showMainTab('artwork'));
   mainTabMqtt.addEventListener('click', () => showMainTab('mqtt'));
   mainTabLogging.addEventListener('click', () => showMainTab('logging'));
+  mainTabControls.addEventListener('click', () => showMainTab('controls'));
   
   // Load artwork cache info
   function loadArtworkInfo() {
