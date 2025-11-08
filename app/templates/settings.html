@@ -266,6 +266,34 @@
       <small style="color:#666;">Maximum log entries to keep in memory (100-100000)</small>
     </div>
     
+    <hr style="margin:1.5rem 0;border:none;border-top:1px solid #ddd;">
+    
+    <h4 style="margin-bottom:0.5rem;">File Logging</h4>
+    <p style="margin-bottom:1rem;color:#666;font-size:0.9rem;">
+      Optionally write logs to rotating files in data/logs directory.
+    </p>
+    
+    <div>
+      <label for="enable_file_logging">
+        <input type="checkbox" id="enable_file_logging" name="enable_file_logging" 
+               {% if logging_cfg.get('enable_file_logging', False) %}checked{% endif %}>
+        Enable File Logging
+      </label>
+      <small style="color:#666;display:block;margin-top:0.25rem;">Write all log entries to files on disk</small>
+    </div>
+    
+    <div>
+      <label for="max_log_files">Maximum Log Files</label>
+      <input type="number" id="max_log_files" name="max_log_files" min="1" max="100" value="{{ logging_cfg.get('max_log_files', 5) }}">
+      <small style="color:#666;">Number of rotating log files to keep (1-100, default: 5)</small>
+    </div>
+    
+    <div>
+      <label for="max_log_size_mb">Max File Size (MB)</label>
+      <input type="number" id="max_log_size_mb" name="max_log_size_mb" min="1" max="1000" value="{{ logging_cfg.get('max_log_size_mb', 10) }}">
+      <small style="color:#666;">Maximum size per log file before rotation (1-1000 MB, default: 10)</small>
+    </div>
+    
     <div style="margin-top:1rem;">
       <button type="submit">Save Logging Settings</button>
       <a href="{{ url_for('settings') }}">Cancel</a>

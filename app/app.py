@@ -4,7 +4,10 @@ import os
 import json
 import logging
 
-from utils.logging_config import setup_logging, get_logger, get_recent_logs, set_log_level
+from utils.logging_config import (
+    setup_logging, get_logger, get_recent_logs, set_log_level,
+    update_file_logging, is_file_logging_enabled
+)
 from storage import Storage
 from player.player import Player
 from nfc.reader import NFCReader
@@ -51,13 +54,33 @@ try:
         log_level_name = logging_cfg.get('log_level', 'INFO')
         log_level = getattr(logging, log_level_name, logging.INFO)
         buffer_capacity = logging_cfg.get('buffer_capacity', 1000)
+        
+        # File logging settings
+        enable_file_logging = logging_cfg.get('enable_file_logging', False)
+        max_log_files = logging_cfg.get('max_log_files', 5)
+        max_log_size_mb = logging_cfg.get('max_log_size_mb', 10)
+        
         # Update logging configuration
         set_log_level(log_level)
         from utils.logging_config import get_log_buffer
         buffer = get_log_buffer()
         if buffer:
             buffer.set_capacity(buffer_capacity)
+        
+        # Update file logging if configured
+        if enable_file_logging:
+            log_dir = os.path.join(data_dir, 'logs')
+            update_file_logging(
+                enable=True,
+                log_file_dir=log_dir,
+                max_log_files=max_log_files,
+                max_log_size_mb=max_log_size_mb
+            )
+        
         log.info('JellyJam starting up with log level: %s', log_level_name)
+        if enable_file_logging:
+            log.info('File logging enabled: %s (max %d files, %d MB each)', 
+                    log_dir, max_log_files, max_log_size_mb)
     else:
         log.info('JellyJam starting up with log level: INFO (default)')
 except Exception as e:
@@ -707,6 +730,11 @@ def save_logging_settings():
         display_lines = int(request.form.get('display_lines', 100))
         buffer_capacity = int(request.form.get('buffer_capacity', 1000))
         
+        # File logging settings
+        enable_file_logging = request.form.get('enable_file_logging') == 'on'
+        max_log_files = int(request.form.get('max_log_files', 5))
+        max_log_size_mb = int(request.form.get('max_log_size_mb', 10))
+        
         # Validate inputs
         valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
         if log_level_name not in valid_levels:
@@ -718,11 +746,20 @@ def save_logging_settings():
         if buffer_capacity < 100 or buffer_capacity > 100000:
             return redirect(url_for('settings', error='Buffer capacity must be between 100 and 100000'))
         
+        if max_log_files < 1 or max_log_files > 100:
+            return redirect(url_for('settings', error='Max log files must be between 1 and 100'))
+        
+        if max_log_size_mb < 1 or max_log_size_mb > 1000:
+            return redirect(url_for('settings', error='Max log file size must be between 1 and 1000 MB'))
+        
         # Save configuration
         logging_cfg = {
             'log_level': log_level_name,
             'display_lines': display_lines,
-            'buffer_capacity': buffer_capacity
+            'buffer_capacity': buffer_capacity,
+            'enable_file_logging': enable_file_logging,
+            'max_log_files': max_log_files,
+            'max_log_size_mb': max_log_size_mb
         }
         
         cfg['logging'] = logging_cfg
@@ -738,6 +775,20 @@ def save_logging_settings():
         buffer = get_log_buffer()
         if buffer:
             buffer.set_capacity(buffer_capacity)
+        
+        # Update file logging settings
+        if enable_file_logging:
+            log_dir = os.path.join(data_dir, 'logs')
+            update_file_logging(
+                enable=True,
+                log_file_dir=log_dir,
+                max_log_files=max_log_files,
+                max_log_size_mb=max_log_size_mb
+            )
+            log.info('File logging enabled: %d files, %d MB each', max_log_files, max_log_size_mb)
+        else:
+            update_file_logging(enable=False)
+            log.info('File logging disabled')
         
         return redirect(url_for('settings', saved=1))
     except Exception as e:
