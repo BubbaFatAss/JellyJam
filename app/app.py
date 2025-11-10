@@ -10,7 +10,7 @@ from utils.logging_config import (
 )
 from storage import Storage
 from player.player import Player
-from nfc.reader import NFCReader
+# NFCReader import moved to initialization section for backward compat fallback
 
 # Initialize logging with defaults first (before any storage access)
 setup_logging(level=logging.INFO, buffer_capacity=1000)
@@ -88,7 +88,20 @@ except Exception as e:
     log.info('JellyJam starting up with log level: INFO (default)')
 
 player = Player(storage)
-nfc = NFCReader(callback=player.handle_nfc)
+
+# Initialize NFC reader using plugin manager
+try:
+    from nfc.reader_manager import create_nfc_reader
+    nfc = create_nfc_reader(callback=player.handle_nfc, storage=storage)
+    nfc.start()  # Start the NFC reader plugin
+    log.info('NFC reader started: %s', nfc.get_plugin_name())
+except Exception as e:
+    log.error('Failed to initialize NFC reader manager: %s', e, exc_info=True)
+    # Fall back to old NFCReader for backward compatibility
+    log.warning('Falling back to legacy NFCReader')
+    from nfc.reader import NFCReader
+    nfc = NFCReader(callback=player.handle_nfc)
+    nfc.start()
 
 # Initialize nightlight
 nightlight = None
@@ -649,7 +662,10 @@ def settings():
     # Get Local Music config
     local_music_cfg = cfg.get('local_music', {})
     
-    return render_template('settings.html', display_cfg=disp, saved=saved_flag, plugins_json=plugins_json, mqtt_cfg=mqtt_cfg, lighting_cfg=lighting_cfg, logging_cfg=logging_cfg, controls_cfg=controls_cfg, local_music_cfg=local_music_cfg)
+    # Get NFC config
+    nfc_cfg = cfg.get('nfc', {})
+    
+    return render_template('settings.html', display_cfg=disp, saved=saved_flag, plugins_json=plugins_json, mqtt_cfg=mqtt_cfg, lighting_cfg=lighting_cfg, logging_cfg=logging_cfg, controls_cfg=controls_cfg, local_music_cfg=local_music_cfg, nfc_cfg=nfc_cfg)
 
 @app.route('/api/artwork/info', methods=['GET'])
 def artwork_info():
@@ -960,6 +976,111 @@ def settings_local_music():
         return redirect(url_for('settings', saved=1))
     except Exception as e:
         log.error('Error saving local music settings: %s', e, exc_info=True)
+        return redirect(url_for('settings', error=str(e)))
+
+@app.route('/settings/nfc', methods=['POST'])
+def settings_nfc():
+    """Save NFC reader configuration."""
+    try:
+        cfg = storage.load() or {}
+        
+        # Get active plugin
+        active_plugin = request.form.get('nfc_active', 'mock').strip()
+        
+        # Validate plugin exists
+        from nfc.reader_manager import AVAILABLE_PLUGINS
+        if active_plugin not in AVAILABLE_PLUGINS:
+            return redirect(url_for('settings', error=f'Unknown NFC plugin: {active_plugin}'))
+        
+        # Build plugin-specific configuration
+        plugin_config = {}
+        
+        if active_plugin == 'pn532':
+            # PN532 configuration
+            interface = request.form.get('pn532_interface', 'i2c').strip()
+            plugin_config['interface'] = interface
+            
+            if interface == 'i2c':
+                # I2C settings
+                i2c_bus = request.form.get('pn532_i2c_bus', '1').strip()
+                i2c_address = request.form.get('pn532_i2c_address', '36').strip()
+                
+                try:
+                    plugin_config['i2c_bus'] = int(i2c_bus) if i2c_bus else 1
+                except ValueError:
+                    return redirect(url_for('settings', error='I2C bus must be a number'))
+                
+                try:
+                    plugin_config['i2c_address'] = int(i2c_address) if i2c_address else 36
+                except ValueError:
+                    return redirect(url_for('settings', error='I2C address must be a number'))
+            
+            elif interface == 'spi':
+                # SPI settings
+                spi_bus = request.form.get('pn532_spi_bus', '0').strip()
+                spi_device = request.form.get('pn532_spi_device', '0').strip()
+                
+                try:
+                    plugin_config['spi_bus'] = int(spi_bus) if spi_bus else 0
+                except ValueError:
+                    return redirect(url_for('settings', error='SPI bus must be a number'))
+                
+                try:
+                    plugin_config['spi_device'] = int(spi_device) if spi_device else 0
+                except ValueError:
+                    return redirect(url_for('settings', error='SPI device must be a number'))
+            
+            # Common PN532 settings
+            reset_pin = request.form.get('pn532_reset_pin', '').strip()
+            if reset_pin:
+                try:
+                    pin = int(reset_pin)
+                    if pin < 0 or pin > 40:
+                        return redirect(url_for('settings', error='Reset pin must be 0-40'))
+                    plugin_config['reset_pin'] = pin
+                except ValueError:
+                    return redirect(url_for('settings', error='Reset pin must be a number'))
+            
+            poll_interval = request.form.get('pn532_poll_interval', '0.5').strip()
+            try:
+                interval = float(poll_interval)
+                if interval < 0.1 or interval > 2.0:
+                    return redirect(url_for('settings', error='Poll interval must be 0.1-2.0 seconds'))
+                plugin_config['poll_interval'] = interval
+            except ValueError:
+                return redirect(url_for('settings', error='Poll interval must be a number'))
+            
+            debounce_time = request.form.get('pn532_debounce_time', '1.0').strip()
+            try:
+                debounce = float(debounce_time)
+                if debounce < 0.5 or debounce > 5.0:
+                    return redirect(url_for('settings', error='Debounce time must be 0.5-5.0 seconds'))
+                plugin_config['debounce_time'] = debounce
+            except ValueError:
+                return redirect(url_for('settings', error='Debounce time must be a number'))
+        
+        # Validate configuration using plugin class
+        plugin_class = AVAILABLE_PLUGINS[active_plugin]
+        errors = plugin_class.validate_config(plugin_config)
+        if errors:
+            return redirect(url_for('settings', error='; '.join(errors)))
+        
+        # Save configuration
+        nfc_cfg = {
+            'active': active_plugin,
+            'plugins': {
+                active_plugin: plugin_config
+            }
+        }
+        
+        cfg['nfc'] = nfc_cfg
+        storage.save(cfg)
+        
+        log.info('NFC settings saved: %s. Restart required for changes to take effect.', active_plugin)
+        
+        return redirect(url_for('settings', saved=1))
+    except Exception as e:
+        log.error('Error saving NFC settings: %s', e, exc_info=True)
         return redirect(url_for('settings', error=str(e)))
 
 # create LED matrix mirror (in-memory buffer, hardware-backed when available)

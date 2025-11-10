@@ -12,6 +12,7 @@
   <button type="button" id="main-tab-logging" class="tab-btn">Logging</button>
   <button type="button" id="main-tab-controls" class="tab-btn">Controls</button>
   <button type="button" id="main-tab-local-music" class="tab-btn">Local Music</button>
+  <button type="button" id="main-tab-nfc" class="tab-btn">NFC</button>
 </div>
 
 <!-- Display Tab -->
@@ -539,9 +540,129 @@
   </form>
 </div>
 
+<!-- NFC Tab -->
+<div id="nfc-tab-content" style="display:none;">
+  <h3>NFC Reader Settings</h3>
+  <p style="margin-bottom:1.5rem;color:#666;">
+    Configure your NFC card reader hardware. Select a reader plugin and configure its settings.
+  </p>
+  
+  <form method="post" action="{{ url_for('settings_nfc') }}">
+    <div>
+      <label for="nfc_active">NFC Reader Type</label>
+      <select id="nfc_active" name="nfc_active" onchange="nfcPluginChanged()">
+        {% set nfc_active = nfc_cfg.get('active', 'mock') %}
+        <option value="mock" {% if nfc_active == 'mock' %}selected{% endif %}>Mock (Simulation Only)</option>
+        <option value="pn532" {% if nfc_active == 'pn532' %}selected{% endif %}>PN532 (I2C/SPI)</option>
+      </select>
+      <small style="color:#666;">Choose your NFC hardware reader type</small>
+    </div>
+    
+    <!-- Mock Plugin Config (no options) -->
+    <div id="nfc-config-mock" class="nfc-plugin-config" style="display:none;">
+      <p style="margin:1rem 0;padding:1rem;background:#e8f4f8;border-left:4px solid #0288d1;border-radius:4px;">
+        <strong>Mock Reader:</strong> No configuration needed. This reader only responds to simulated scans from the web UI.
+      </p>
+    </div>
+    
+    <!-- PN532 Plugin Config -->
+    <div id="nfc-config-pn532" class="nfc-plugin-config" style="display:none;">
+      <h4 style="margin:1.5rem 0 0.5rem 0;">PN532 Configuration</h4>
+      
+      {% set pn532_cfg = nfc_cfg.get('plugins', {}).get('pn532', {}) %}
+      
+      <div>
+        <label for="pn532_interface">Interface Type</label>
+        <select id="pn532_interface" name="pn532_interface" onchange="pn532InterfaceChanged()">
+          <option value="i2c" {% if pn532_cfg.get('interface', 'i2c') == 'i2c' %}selected{% endif %}>I2C</option>
+          <option value="spi" {% if pn532_cfg.get('interface', 'i2c') == 'spi' %}selected{% endif %}>SPI</option>
+        </select>
+        <small style="color:#666;">Communication interface to PN532 module</small>
+      </div>
+      
+      <!-- I2C Settings -->
+      <div id="pn532-i2c-settings" style="margin-top:1rem;">
+        <div>
+          <label for="pn532_i2c_bus">I2C Bus</label>
+          <input type="number" id="pn532_i2c_bus" name="pn532_i2c_bus" min="0" max="10" 
+                 value="{{ pn532_cfg.get('i2c_bus', 1) }}" placeholder="1">
+          <small style="color:#666;">I2C bus number (usually 1 on Raspberry Pi)</small>
+        </div>
+        
+        <div>
+          <label for="pn532_i2c_address">I2C Address (Decimal)</label>
+          <input type="number" id="pn532_i2c_address" name="pn532_i2c_address" min="1" max="127" 
+                 value="{{ pn532_cfg.get('i2c_address', 36) }}" placeholder="36">
+          <small style="color:#666;">I2C address in decimal (36 = 0x24 hex, common default)</small>
+        </div>
+      </div>
+      
+      <!-- SPI Settings -->
+      <div id="pn532-spi-settings" style="margin-top:1rem;display:none;">
+        <div>
+          <label for="pn532_spi_bus">SPI Bus</label>
+          <input type="number" id="pn532_spi_bus" name="pn532_spi_bus" min="0" max="1" 
+                 value="{{ pn532_cfg.get('spi_bus', 0) }}" placeholder="0">
+          <small style="color:#666;">SPI bus number (usually 0)</small>
+        </div>
+        
+        <div>
+          <label for="pn532_spi_device">SPI Device</label>
+          <input type="number" id="pn532_spi_device" name="pn532_spi_device" min="0" max="1" 
+                 value="{{ pn532_cfg.get('spi_device', 0) }}" placeholder="0">
+          <small style="color:#666;">SPI chip select (CE0 = 0, CE1 = 1)</small>
+        </div>
+      </div>
+      
+      <!-- Common PN532 Settings -->
+      <div style="margin-top:1rem;">
+        <div>
+          <label for="pn532_reset_pin">Reset Pin (Optional)</label>
+          <input type="number" id="pn532_reset_pin" name="pn532_reset_pin" min="0" max="40" 
+                 value="{{ pn532_cfg.get('reset_pin', '') }}" placeholder="e.g., 6">
+          <small style="color:#666;">GPIO pin for hardware reset (BCM numbering, leave empty to disable)</small>
+        </div>
+        
+        <div>
+          <label for="pn532_poll_interval">Poll Interval (seconds)</label>
+          <input type="number" id="pn532_poll_interval" name="pn532_poll_interval" min="0.1" max="2.0" step="0.1" 
+                 value="{{ pn532_cfg.get('poll_interval', 0.5) }}" placeholder="0.5">
+          <small style="color:#666;">How often to check for cards (0.1 - 2.0 seconds)</small>
+        </div>
+        
+        <div>
+          <label for="pn532_debounce_time">Debounce Time (seconds)</label>
+          <input type="number" id="pn532_debounce_time" name="pn532_debounce_time" min="0.5" max="5.0" step="0.1" 
+                 value="{{ pn532_cfg.get('debounce_time', 1.0) }}" placeholder="1.0">
+          <small style="color:#666;">Minimum time between same card scans (0.5 - 5.0 seconds)</small>
+        </div>
+      </div>
+      
+      <div style="margin-top:1rem;padding:1rem;background:#e8f4f8;border-left:4px solid #0288d1;border-radius:4px;">
+        <strong>💡 PN532 Setup:</strong>
+        <ul style="margin:0.5rem 0 0 1.25rem;padding:0;">
+          <li><strong>I2C Mode:</strong> Connect SDA to GPIO 2, SCL to GPIO 3, VCC to 3.3V, GND to GND</li>
+          <li><strong>SPI Mode:</strong> Connect MOSI, MISO, SCK to SPI pins, CS to CE0/CE1, VCC to 3.3V, GND to GND</li>
+          <li>Requires <code>py532lib</code> library: <code>pip install py532lib</code></li>
+          <li>Enable I2C or SPI in <code>raspi-config</code> if needed</li>
+        </ul>
+      </div>
+    </div>
+    
+    <div style="margin-top:1.5rem;padding:1rem;background:#f8f9fa;border-radius:4px;">
+      <strong>⚠️ Important:</strong> Application restart required for NFC reader changes to take effect.
+    </div>
+    
+    <div style="margin-top:1rem;">
+      <button type="submit">Save NFC Settings</button>
+      <a href="{{ url_for('settings') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function(){
-  // Main tab switching (Display vs Lighting vs Artwork vs MQTT vs Logging vs Controls vs Local Music)
+  // Main tab switching (Display vs Lighting vs Artwork vs MQTT vs Logging vs Controls vs Local Music vs NFC)
   const mainTabDisplay = document.getElementById('main-tab-display');
   const mainTabLighting = document.getElementById('main-tab-lighting');
   const mainTabArtwork = document.getElementById('main-tab-artwork');
@@ -549,6 +670,7 @@ document.addEventListener('DOMContentLoaded', function(){
   const mainTabLogging = document.getElementById('main-tab-logging');
   const mainTabControls = document.getElementById('main-tab-controls');
   const mainTabLocalMusic = document.getElementById('main-tab-local-music');
+  const mainTabNfc = document.getElementById('main-tab-nfc');
   const displayTabContent = document.getElementById('display-tab-content');
   const lightingTabContent = document.getElementById('lighting-tab-content');
   const artworkTabContent = document.getElementById('artwork-tab-content');
@@ -556,6 +678,7 @@ document.addEventListener('DOMContentLoaded', function(){
   const loggingTabContent = document.getElementById('logging-tab-content');
   const controlsTabContent = document.getElementById('controls-tab-content');
   const localMusicTabContent = document.getElementById('local-music-tab-content');
+  const nfcTabContent = document.getElementById('nfc-tab-content');
   
   function showMainTab(tab) {
     // Hide all tabs
@@ -566,6 +689,7 @@ document.addEventListener('DOMContentLoaded', function(){
     loggingTabContent.style.display = 'none';
     controlsTabContent.style.display = 'none';
     localMusicTabContent.style.display = 'none';
+    nfcTabContent.style.display = 'none';
     mainTabDisplay.classList.remove('active');
     mainTabLighting.classList.remove('active');
     mainTabArtwork.classList.remove('active');
@@ -573,6 +697,7 @@ document.addEventListener('DOMContentLoaded', function(){
     mainTabLogging.classList.remove('active');
     mainTabControls.classList.remove('active');
     mainTabLocalMusic.classList.remove('active');
+    mainTabNfc.classList.remove('active');
     
     // Show selected tab
     if (tab === 'lighting') {
@@ -595,6 +720,10 @@ document.addEventListener('DOMContentLoaded', function(){
     } else if (tab === 'local-music') {
       localMusicTabContent.style.display = '';
       mainTabLocalMusic.classList.add('active');
+    } else if (tab === 'nfc') {
+      nfcTabContent.style.display = '';
+      mainTabNfc.classList.add('active');
+      nfcPluginChanged();  // Update plugin config visibility
     } else {
       displayTabContent.style.display = '';
       mainTabDisplay.classList.add('active');
@@ -608,6 +737,7 @@ document.addEventListener('DOMContentLoaded', function(){
   mainTabLogging.addEventListener('click', () => showMainTab('logging'));
   mainTabControls.addEventListener('click', () => showMainTab('controls'));
   mainTabLocalMusic.addEventListener('click', () => showMainTab('local-music'));
+  mainTabNfc.addEventListener('click', () => showMainTab('nfc'));
   
   // Load artwork cache info
   function loadArtworkInfo() {
@@ -819,6 +949,38 @@ document.addEventListener('DOMContentLoaded', function(){
   if (document.getElementById('log-filter-level')) {
     document.getElementById('log-filter-level').addEventListener('change', loadLogs);
   }
+  
+  // NFC plugin configuration switching
+  function nfcPluginChanged() {
+    const activePlugin = document.getElementById('nfc_active').value;
+    document.querySelectorAll('.nfc-plugin-config').forEach(el => el.style.display = 'none');
+    const configDiv = document.getElementById('nfc-config-' + activePlugin);
+    if (configDiv) {
+      configDiv.style.display = 'block';
+    }
+    
+    // If PN532, also update I2C/SPI visibility
+    if (activePlugin === 'pn532') {
+      pn532InterfaceChanged();
+    }
+  }
+  
+  function pn532InterfaceChanged() {
+    const interfaceType = document.getElementById('pn532_interface').value;
+    const i2cSettings = document.getElementById('pn532-i2c-settings');
+    const spiSettings = document.getElementById('pn532-spi-settings');
+    
+    if (interfaceType === 'i2c') {
+      i2cSettings.style.display = 'block';
+      spiSettings.style.display = 'none';
+    } else {
+      i2cSettings.style.display = 'none';
+      spiSettings.style.display = 'block';
+    }
+  }
+  
+  // Initialize NFC plugin config visibility on page load
+  nfcPluginChanged();
   
   // Stop log viewer when leaving the page
   window.addEventListener('beforeunload', stopLogViewer);
