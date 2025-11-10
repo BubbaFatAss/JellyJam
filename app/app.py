@@ -661,7 +661,8 @@ def settings():
     # Get NFC config
     nfc_cfg = cfg.get('nfc', {})
     
-    return render_template('settings.html', display_cfg=disp, saved=saved_flag, plugins_json=plugins_json, mqtt_cfg=mqtt_cfg, lighting_cfg=lighting_cfg, logging_cfg=logging_cfg, controls_cfg=controls_cfg, local_music_cfg=local_music_cfg, nfc_cfg=nfc_cfg)
+    return render_template('settings.html', config=cfg, display_cfg=disp, saved=saved_flag, plugins_json=plugins_json, mqtt_cfg=mqtt_cfg, lighting_cfg=lighting_cfg, logging_cfg=logging_cfg, controls_cfg=controls_cfg, local_music_cfg=local_music_cfg, nfc_cfg=nfc_cfg)
+
 
 @app.route('/api/artwork/info', methods=['GET'])
 def artwork_info():
@@ -1717,48 +1718,44 @@ def mappings_erase():
     return redirect(url_for('mappings'))
 
 
-@app.route('/simulate', methods=['GET','POST'])
-def simulate():
-    if request.method == 'POST':
-        card = request.json.get('card_id')
-        if not card:
-            return jsonify({'error': 'card_id required'}), 400
-        # simulate calling NFC callback
-        player.handle_nfc(card)
-        # Try to immediately trigger any per-track animation for this mapping so
-        # web UI-initiated mappings start their animations without waiting for
-        # the background poller interval.
-        try:
-            def _try_trigger():
-                try:
-                    now = player.now_playing() or {}
-                    track_id = now.get('id')
-                    mapping_card = player._state.get('mapping_card')
-                    if mapping_card and track_id and matrix is not None:
-                        h = _hash_id(track_id)
-                        cfg = storage.load()
-                        mapping = cfg.get('mappings', {}).get(mapping_card, {})
-                        stored = mapping.get('animations', {}) or {}
-                        assoc = stored.get(h)
-                        if assoc:
-                            fname = assoc.get('animation')
-                            loop = bool(assoc.get('loop', False))
-                            try:
-                                _play_animation_safe(fname, loop=loop, speed=1.0)
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-            # run in background so simulate returns quickly
-            import threading
-            threading.Thread(target=_try_trigger, daemon=True).start()
-        except Exception:
-            pass
-        return jsonify({'ok': True})
-    # GET -> render simulate page
-    cfg = storage.load()
-    nfc_cards = cfg.get('nfc_cards', {})
-    return render_template('simulate.html', nfc_cards=nfc_cards)
+@app.route('/api/simulate', methods=['POST'])
+def api_simulate():
+    """API endpoint to simulate an NFC card scan."""
+    card = request.json.get('card_id') if request.json else None
+    if not card:
+        return jsonify({'error': 'card_id required'}), 400
+    # simulate calling NFC callback
+    player.handle_nfc(card)
+    # Try to immediately trigger any per-track animation for this mapping so
+    # web UI-initiated mappings start their animations without waiting for
+    # the background poller interval.
+    try:
+        def _try_trigger():
+            try:
+                now = player.now_playing() or {}
+                track_id = now.get('id')
+                mapping_card = player._state.get('mapping_card')
+                if mapping_card and track_id and matrix is not None:
+                    h = _hash_id(track_id)
+                    cfg = storage.load()
+                    mapping = cfg.get('mappings', {}).get(mapping_card, {})
+                    stored = mapping.get('animations', {}) or {}
+                    assoc = stored.get(h)
+                    if assoc:
+                        fname = assoc.get('animation')
+                        loop = bool(assoc.get('loop', False))
+                        try:
+                            _play_animation_safe(fname, loop=loop, speed=1.0)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        # run in background so simulate returns quickly
+        import threading
+        threading.Thread(target=_try_trigger, daemon=True).start()
+    except Exception:
+        pass
+    return jsonify({'ok': True})
 
 
 @app.route('/status')

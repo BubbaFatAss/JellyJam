@@ -30,6 +30,10 @@
           <td style="padding:1rem;font-weight:500;">{{ friendly_name }}</td>
           <td style="padding:1rem;font-family:monospace;color:#666;">{{ card_id }}</td>
           <td style="padding:1rem;text-align:center;">
+            <button type="button" onclick="simulateCard('{{ card_id }}', '{{ friendly_name }}')" 
+                    style="background:#0288d1;color:white;border:none;padding:0.5rem 1rem;border-radius:4px;cursor:pointer;margin-right:0.5rem;">
+              ▶️ Simulate
+            </button>
             <form method="post" action="{{ url_for('delete_nfc_card') }}" style="display:inline;" onsubmit="return confirm('Delete card \'{{ friendly_name }}\'?');">
               <input type="hidden" name="card_id" value="{{ card_id }}">
               <button type="submit" style="background:#d32f2f;color:white;border:none;padding:0.5rem 1rem;border-radius:4px;cursor:pointer;">
@@ -196,6 +200,39 @@ function manualEntry() {
   const cardId = prompt('Enter card ID:');
   if (cardId && cardId.trim()) {
     proceedToNameEntry(cardId.trim());
+  }
+}
+
+// Simulate NFC card scan
+async function simulateCard(cardId, friendlyName) {
+  try {
+    const res = await fetch('/api/simulate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({card_id: cardId})
+    });
+    const j = await res.json();
+    
+    if (j.ok) {
+      if (typeof showToast === 'function') {
+        showToast(`✓ Simulated card scan: ${friendlyName}`, 2500);
+      } else {
+        alert(`Simulated card scan: ${friendlyName}`);
+      }
+    } else {
+      if (typeof showToast === 'function') {
+        showToast(`Error: ${j.error || 'Simulation failed'}`, 3000);
+      } else {
+        alert(`Error: ${j.error || 'Simulation failed'}`);
+      }
+    }
+  } catch (err) {
+    console.error('Simulation error:', err);
+    if (typeof showToast === 'function') {
+      showToast('Network error during simulation', 3000);
+    } else {
+      alert('Network error during simulation');
+    }
   }
 }
 
