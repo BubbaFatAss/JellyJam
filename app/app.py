@@ -853,6 +853,10 @@ def save_controls_settings():
         rotary2_b_pin = request.form.get('rotary2_b_pin', '').strip()
         rotary2_button_pin = request.form.get('rotary2_button_pin', '').strip()
         
+        # Power Button settings
+        power_button_enabled = request.form.get('power_button_enabled') == 'on'
+        power_button_pin = request.form.get('power_button_pin', '').strip()
+        
         # Validate pin numbers
         def validate_pin(pin_str, name):
             if pin_str:
@@ -890,6 +894,14 @@ def save_controls_settings():
                 err = validate_pin(rotary2_button_pin, 'Rotary 2 Button Pin')
                 if err: errors.append(err)
         
+        # Validate power button
+        if power_button_enabled:
+            if not power_button_pin:
+                errors.append('Power Button: GPIO pin is required when enabled')
+            else:
+                err = validate_pin(power_button_pin, 'Power Button Pin')
+                if err: errors.append(err)
+        
         if errors:
             return redirect(url_for('settings', error='; '.join(errors)))
         
@@ -906,6 +918,10 @@ def save_controls_settings():
                 'a_pin': int(rotary2_a_pin) if rotary2_a_pin else None,
                 'b_pin': int(rotary2_b_pin) if rotary2_b_pin else None,
                 'button_pin': int(rotary2_button_pin) if rotary2_button_pin else None
+            },
+            'power_button': {
+                'enabled': power_button_enabled,
+                'pin': int(power_button_pin) if power_button_pin else None
             }
         }
         
@@ -965,6 +981,14 @@ try:
         pass
     # mode for second rotary encoder: 'skip' or 'brightness'
     rotary2_mode = 'skip'
+    
+    # Power state tracking for power button
+    power_state = {
+        'is_on': True,
+        'saved_brightness': initial_b,
+        'saved_lighting_state': None
+    }
+    
     # if socketio available, register a notifier so updates are pushed to clients
     try:
             if socketio is not None:
@@ -1223,6 +1247,117 @@ try:
             log.warning('Failed to start rotary encoder 2: %s', e)
 except Exception as e:
     log.warning('Failed to initialize rotary encoders: %s', e)
+
+
+# Optional power button support: check config for pin settings
+try:
+    import os
+    
+    # Load power button config
+    controls_cfg = storage.load().get('controls', {}) if storage else {}
+    power_button_cfg = controls_cfg.get('power_button', {})
+    
+    power_button_enabled = power_button_cfg.get('enabled', False)
+    power_pin = power_button_cfg.get('pin') or os.environ.get('POWER_BUTTON_PIN')
+    
+    if (power_button_enabled or power_pin) and power_pin:
+        try:
+            import RPi.GPIO as GPIO
+            import time
+            from threading import Thread
+            
+            # Setup GPIO for power button (pull-up, button connects to ground)
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(int(power_pin), GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            
+            # Track last button press time for debouncing
+            _last_power_press_time = [0.0]
+            _POWER_DEBOUNCE_SEC = 0.5
+            
+            def _power_button_callback(channel):
+                """Handle power button press - toggle display and lights on/off."""
+                try:
+                    # Debounce
+                    now = time.time()
+                    if now - _last_power_press_time[0] < _POWER_DEBOUNCE_SEC:
+                        return
+                    _last_power_press_time[0] = now
+                    
+                    # Toggle power state
+                    is_currently_on = power_state['is_on']
+                    
+                    if is_currently_on:
+                        # Turn OFF: stop music, save states, turn off display/lights
+                        log.info('Power button: turning OFF')
+                        
+                        # Stop any playing music
+                        try:
+                            if player and player._state.get('playing'):
+                                player.pause()
+                        except Exception as e:
+                            log.warning('Failed to stop music on power off: %s', e)
+                        
+                        # Save current brightness
+                        try:
+                            if matrix:
+                                power_state['saved_brightness'] = matrix.get_brightness()
+                        except Exception:
+                            pass
+                        
+                        # Turn off display
+                        try:
+                            if matrix:
+                                matrix.set_brightness(0)
+                                matrix.clear()
+                        except Exception as e:
+                            log.warning('Failed to turn off display: %s', e)
+                        
+                        # Turn off nightlight/lighting
+                        try:
+                            from hardware.nightlight import nightlight
+                            if nightlight:
+                                power_state['saved_lighting_state'] = nightlight.get_brightness()
+                                nightlight.set_brightness(0)
+                        except Exception as e:
+                            log.debug('No nightlight to turn off: %s', e)
+                        
+                        power_state['is_on'] = False
+                        log.info('Power OFF complete')
+                        
+                    else:
+                        # Turn ON: restore display/lights to previous state
+                        log.info('Power button: turning ON')
+                        
+                        # Restore display brightness
+                        try:
+                            if matrix:
+                                saved_brightness = power_state.get('saved_brightness', 25)
+                                matrix.set_brightness(saved_brightness)
+                        except Exception as e:
+                            log.warning('Failed to restore display brightness: %s', e)
+                        
+                        # Restore lighting
+                        try:
+                            from hardware.nightlight import nightlight
+                            if nightlight and power_state.get('saved_lighting_state') is not None:
+                                nightlight.set_brightness(power_state['saved_lighting_state'])
+                        except Exception as e:
+                            log.debug('No nightlight to restore: %s', e)
+                        
+                        power_state['is_on'] = True
+                        log.info('Power ON complete')
+                        
+                except Exception as e:
+                    log.error('Error in power button callback: %s', e, exc_info=True)
+            
+            # Setup event detection for button press (falling edge = button pressed to ground)
+            GPIO.add_event_detect(int(power_pin), GPIO.FALLING, callback=_power_button_callback, bouncetime=int(_POWER_DEBOUNCE_SEC * 1000))
+            
+            log.info('Power button enabled on GPIO pin %s', power_pin)
+        except Exception as e:
+            log.warning('Failed to start power button: %s', e)
+except Exception as e:
+    log.warning('Failed to initialize power button: %s', e)
 
 
 @app.route('/')

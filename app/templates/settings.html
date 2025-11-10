@@ -456,6 +456,40 @@
       <small style="color:#666;">GPIO pin for encoder push button (toggles skip/brightness mode)</small>
     </div>
     
+    <hr style="margin:2rem 0;border:none;border-top:1px solid #ddd;">
+    
+    <h4 style="margin-bottom:0.5rem;">Power Button</h4>
+    <p style="margin-bottom:1rem;color:#666;font-size:0.9rem;">
+      Configure an optional power button to toggle display and lighting on/off.
+    </p>
+    
+    <div>
+      <label for="power_button_enabled">
+        <input type="checkbox" id="power_button_enabled" name="power_button_enabled" 
+               {% if controls_cfg.get('power_button', {}).get('enabled', false) %}checked{% endif %}>
+        Enable Power Button
+      </label>
+      <small style="color:#666;display:block;margin-top:0.25rem;">Enable GPIO-based power button</small>
+    </div>
+    
+    <div>
+      <label for="power_button_pin">GPIO Pin</label>
+      <input type="number" id="power_button_pin" name="power_button_pin" min="0" max="40" 
+             value="{{ controls_cfg.get('power_button', {}).get('pin', '') }}" 
+             placeholder="e.g., 25">
+      <small style="color:#666;">GPIO pin for power button (BCM numbering, with internal pull-up)</small>
+    </div>
+    
+    <div style="margin-top:1rem;padding:1rem;background:#e8f4f8;border-left:4px solid #0288d1;border-radius:4px;">
+      <strong>💡 Power Button Behavior:</strong>
+      <ul style="margin:0.5rem 0 0 1.25rem;padding:0;">
+        <li>First press: Stops music playback and turns off display/lights</li>
+        <li>Second press: Restores display and lights to previous state</li>
+        <li>Uses internal pull-up resistor (button connects pin to ground)</li>
+        <li>Software debouncing included (500ms default)</li>
+      </ul>
+    </div>
+    
     <div style="margin-top:1.5rem;padding:1rem;background:#f8f9fa;border-radius:4px;">
       <strong>⚠️ Important:</strong> Application restart required for control changes to take effect.
     </div>
