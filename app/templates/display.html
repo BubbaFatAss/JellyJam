@@ -288,9 +288,15 @@
   });
   document.getElementById('animation-stop').addEventListener('click', async ()=>{
     try{
-      await fetch('/api/animations/stop', {method:'POST'});
+      const r = await fetch('/api/animations/stop', {
+        method:'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({clear: true})
+      });
+      const j = await r.json();
+      if(!r.ok) return alert('Stop failed: '+(j.error||r.status));
       showToast('Stopped animation');
-    }catch(e){}
+    }catch(e){ alert('Stop failed: '+e.message); }
   });
 
   // Delete selected animation

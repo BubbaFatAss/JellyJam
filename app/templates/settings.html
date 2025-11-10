@@ -13,6 +13,7 @@
   <button type="button" id="main-tab-controls" class="tab-btn">Controls</button>
   <button type="button" id="main-tab-local-music" class="tab-btn">Local Music</button>
   <button type="button" id="main-tab-nfc" class="tab-btn">NFC</button>
+  <button type="button" id="main-tab-spotify" class="tab-btn">Spotify</button>
 </div>
 
 <!-- Display Tab -->
@@ -108,22 +109,6 @@
 
     </div>
     
-    <p style="margin-top:1rem;font-size:0.9rem;color:#666">Note: The <strong>Basic</strong> tab is a convenience wrapper that exposes the most common plugin settings. If you need more control or want to edit additional options, switch to the <strong>Advanced</strong> tab to edit the raw plugin JSON.</p>
-
-  </div>
-
-  <div id="advanced-tab" style="display:none;">
-    <h3>Advanced (raw JSON)</h3>
-    <p style="font-size:0.9rem;color:#666">Edit plugin configuration as raw JSON. Top-level keys are plugin names. Example:
-    <pre>{
-  "ws2812": {"width":16,"height":16,"serpentine":false},
-  "rgbmatrix": {"rows":64,"cols":64,"chain":1}
-}</pre></p>
-    <div>
-      <label for="plugins_json">Plugin JSON</label>
-      <textarea id="plugins_json" name="plugins_json" rows="12" style="width:100%;font-family:monospace;">{{ plugins_json }}</textarea>
-    </div>
-    
     <hr style="margin:2rem 0;border:none;border-top:1px solid #ddd;">
     
     <h4 style="margin-bottom:0.5rem;">Startup Animation</h4>
@@ -164,6 +149,22 @@
              value="{{ display_cfg.get('animation_dup_suppress_sec', 0.5) }}" 
              placeholder="0.5">
       <small style="color:#666;">Time in seconds to suppress duplicate animation triggers (default: 0.5)</small>
+    </div>
+    
+    <p style="margin-top:1rem;font-size:0.9rem;color:#666">Note: The <strong>Basic</strong> tab is a convenience wrapper that exposes the most common plugin settings. If you need more control or want to edit additional options, switch to the <strong>Advanced</strong> tab to edit the raw plugin JSON.</p>
+
+  </div>
+
+  <div id="advanced-tab" style="display:none;">
+    <h3>Advanced (raw JSON)</h3>
+    <p style="font-size:0.9rem;color:#666">Edit plugin configuration as raw JSON. Top-level keys are plugin names. Example:
+    <pre>{
+  "ws2812": {"width":16,"height":16,"serpentine":false},
+  "rgbmatrix": {"rows":64,"cols":64,"chain":1}
+}</pre></p>
+    <div>
+      <label for="plugins_json">Plugin JSON</label>
+      <textarea id="plugins_json" name="plugins_json" rows="12" style="width:100%;font-family:monospace;">{{ plugins_json }}</textarea>
     </div>
   </div>
 
@@ -660,9 +661,62 @@
   </form>
 </div>
 
+<!-- Spotify Tab -->
+<div id="spotify-tab-content" style="display:none;">
+  <h3>Spotify Settings</h3>
+  <form method="post" action="{{ url_for('spotify_config') }}">
+    <div class="settings-group">
+      <h4>API Credentials</h4>
+      <label>Client ID
+        <input name="client_id" value="{{ config.get('spotify', {}).get('client_id','') }}" placeholder="Your Spotify App Client ID">
+      </label>
+      <label>Client Secret
+        <input name="client_secret" value="{{ config.get('spotify', {}).get('client_secret','') }}" placeholder="Your Spotify App Client Secret">
+      </label>
+      <label>Redirect URI
+        <input name="redirect_uri" value="{{ config.get('spotify', {}).get('redirect_uri','http://127.0.0.1:5000/spotify/callback') }}">
+        <small class="help">Register this exact URI in your Spotify app settings (Developer Dashboard). For local testing use <code>http://127.0.0.1:5000/spotify/callback</code>. Spotify blocks non-127.0.0.1 HTTP redirect URIs. For remote Pi, use your Pi's LAN address or an HTTPS tunnel (ngrok).</small>
+      </label>
+    </div>
+    
+    <div class="settings-group">
+      <h4>OAuth Connection</h4>
+      <div id="spotify-token-status">
+        {% if config.get('spotify_token') %}
+          <p style="color:#28a745;font-weight:500;">✓ Connected (token stored)</p>
+          <button type="button" onclick="if(confirm('Disconnect from Spotify?')) document.getElementById('spotify-disconnect-form').submit();" class="danger">
+            Disconnect from Spotify
+          </button>
+          <form id="spotify-disconnect-form" method="post" action="{{ url_for('spotify_disconnect') }}" style="display:none;">
+          </form>
+        {% else %}
+          <p style="color:#666;">Not connected</p>
+          <a href="{{ url_for('spotify_connect') }}">
+            <button type="button" style="background:#1db954;color:white;">Connect to Spotify</button>
+          </a>
+        {% endif %}
+      </div>
+    </div>
+    
+    <div class="settings-group">
+      <h4>Playback Device</h4>
+      <p class="help">Select the Spotify Connect device that JellyJam should control.</p>
+      <label>Device
+        <select id="spotify-device-select"></select>
+      </label>
+      <button type="button" id="spotify-refresh-devices" style="margin-top:0.5rem;">Refresh Devices</button>
+    </div>
+    
+    <div style="margin-top:1rem;">
+      <button type="submit">Save Spotify Settings</button>
+      <a href="{{ url_for('settings') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function(){
-  // Main tab switching (Display vs Lighting vs Artwork vs MQTT vs Logging vs Controls vs Local Music vs NFC)
+  // Main tab switching (Display vs Lighting vs Artwork vs MQTT vs Logging vs Controls vs Local Music vs NFC vs Spotify)
   const mainTabDisplay = document.getElementById('main-tab-display');
   const mainTabLighting = document.getElementById('main-tab-lighting');
   const mainTabArtwork = document.getElementById('main-tab-artwork');
@@ -671,6 +725,7 @@ document.addEventListener('DOMContentLoaded', function(){
   const mainTabControls = document.getElementById('main-tab-controls');
   const mainTabLocalMusic = document.getElementById('main-tab-local-music');
   const mainTabNfc = document.getElementById('main-tab-nfc');
+  const mainTabSpotify = document.getElementById('main-tab-spotify');
   const displayTabContent = document.getElementById('display-tab-content');
   const lightingTabContent = document.getElementById('lighting-tab-content');
   const artworkTabContent = document.getElementById('artwork-tab-content');
@@ -679,6 +734,7 @@ document.addEventListener('DOMContentLoaded', function(){
   const controlsTabContent = document.getElementById('controls-tab-content');
   const localMusicTabContent = document.getElementById('local-music-tab-content');
   const nfcTabContent = document.getElementById('nfc-tab-content');
+  const spotifyTabContent = document.getElementById('spotify-tab-content');
   
   function showMainTab(tab) {
     // Hide all tabs
@@ -690,6 +746,7 @@ document.addEventListener('DOMContentLoaded', function(){
     controlsTabContent.style.display = 'none';
     localMusicTabContent.style.display = 'none';
     nfcTabContent.style.display = 'none';
+    spotifyTabContent.style.display = 'none';
     mainTabDisplay.classList.remove('active');
     mainTabLighting.classList.remove('active');
     mainTabArtwork.classList.remove('active');
@@ -698,6 +755,7 @@ document.addEventListener('DOMContentLoaded', function(){
     mainTabControls.classList.remove('active');
     mainTabLocalMusic.classList.remove('active');
     mainTabNfc.classList.remove('active');
+    mainTabSpotify.classList.remove('active');
     
     // Show selected tab
     if (tab === 'lighting') {
@@ -724,6 +782,10 @@ document.addEventListener('DOMContentLoaded', function(){
       nfcTabContent.style.display = '';
       mainTabNfc.classList.add('active');
       nfcPluginChanged();  // Update plugin config visibility
+    } else if (tab === 'spotify') {
+      spotifyTabContent.style.display = '';
+      mainTabSpotify.classList.add('active');
+      loadSpotifyDevices();  // Load Spotify devices
     } else {
       displayTabContent.style.display = '';
       mainTabDisplay.classList.add('active');
@@ -738,6 +800,7 @@ document.addEventListener('DOMContentLoaded', function(){
   mainTabControls.addEventListener('click', () => showMainTab('controls'));
   mainTabLocalMusic.addEventListener('click', () => showMainTab('local-music'));
   mainTabNfc.addEventListener('click', () => showMainTab('nfc'));
+  mainTabSpotify.addEventListener('click', () => showMainTab('spotify'));
   
   // Load artwork cache info
   function loadArtworkInfo() {
@@ -981,6 +1044,50 @@ document.addEventListener('DOMContentLoaded', function(){
   
   // Initialize NFC plugin config visibility on page load
   nfcPluginChanged();
+  
+  // Spotify device loading function
+  async function loadSpotifyDevices(){
+    try {
+      const r = await fetch('/api/spotify/devices');
+      const j = await r.json();
+      const sel = document.getElementById('spotify-device-select');
+      sel.innerHTML = '';
+      const devs = j.devices || [];
+      if(devs.length===0){ 
+        sel.add(new Option('(no devices)', '')); 
+        sel.disabled = true; 
+        return; 
+      }
+      sel.disabled = false;
+      for(const d of devs){ 
+        sel.add(new Option(`${d.name} (${d.type})`, d.id)); 
+      }
+      if(j.selected) sel.value = j.selected;
+      sel.addEventListener('change', async ()=>{
+        await fetch('/api/spotify/select',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({device_id: sel.value})
+        });
+        if (typeof showToast === 'function') {
+          showToast('Device selected', 2000);
+        }
+      });
+    } catch(err) {
+      console.error('Failed to load Spotify devices:', err);
+    }
+  }
+  
+  // Spotify refresh devices button
+  const refreshDevicesBtn = document.getElementById('spotify-refresh-devices');
+  if (refreshDevicesBtn) {
+    refreshDevicesBtn.addEventListener('click', async ()=>{ 
+      await loadSpotifyDevices(); 
+      if (typeof showToast === 'function') {
+        showToast('Devices refreshed', 2000);
+      }
+    });
+  }
   
   // Stop log viewer when leaving the page
   window.addEventListener('beforeunload', stopLogViewer);

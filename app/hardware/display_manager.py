@@ -203,108 +203,6 @@ class BasePlugin:
             self._anim_paused.clear()
             t.start()
 
-    def play_wled_json(self, path: str, speed: float = 1.0, loop: bool = True):
-        # Generic WLED-style JSON playback. Supports simple lists of frames
-        # where each frame is either a flat list of hex colors or a nested
-        # list-of-rows. Runs in a background thread similar to GIF playback.
-        try:
-            self.stop_animation()
-        except Exception:
-            pass
-        def _runner():
-            try:
-                text = Path(path).read_text()
-                # try to parse one or more JSON objects
-                objs = []
-                try:
-                    objs = json.loads(text)
-                except Exception:
-                    # attempt to parse multiple concatenated JSON objects
-                    decoder = json.JSONDecoder()
-                    idx = 0
-                    text_len = len(text)
-                    while True:
-                        while idx < text_len and text[idx].isspace():
-                            idx += 1
-                        if idx >= text_len:
-                            break
-                        try:
-                            obj, end = decoder.raw_decode(text, idx)
-                            objs.append(obj)
-                            idx = end
-                        except ValueError:
-                            break
-                frames = []
-                # normalize various shapes
-                if isinstance(objs, dict):
-                    # some WLED exports wrap frames in a key
-                    if 'frames' in objs and isinstance(objs['frames'], list):
-                        frames = objs['frames']
-                    else:
-                        # try to treat dict as single frame
-                        frames = [objs]
-                elif isinstance(objs, list):
-                    frames = objs
-                else:
-                    frames = [objs]
-
-                if not frames:
-                    return
-                self._anim_stop.clear()
-                while not self._anim_stop.is_set():
-                    for fr in frames:
-                        # honor pause flag
-                        while self._anim_paused.is_set() and not self._anim_stop.is_set():
-                            time.sleep(0.05)
-                        if self._anim_stop.is_set():
-                            break
-                        # each frame may be a list of colors or a dict containing 'pixels' and optional 'duration'
-                        duration = 0.1
-                        payload = fr
-                        if isinstance(fr, dict):
-                            duration = float(fr.get('duration', duration))
-                            payload = fr.get('pixels', fr.get('frame', fr))
-                        # apply pixels
-                        try:
-                            if isinstance(payload, list):
-                                # payload may be nested or flat
-                                # prefer fast write when available
-                                try:
-                                    self.fast_write_flat(payload)
-                                except Exception:
-                                    self.set_pixels(payload)
-                            else:
-                                log.warning('Unsupported frame payload type for WLED JSON: %s', type(payload))
-                        except Exception:
-                            log.exception('Failed to apply WLED frame')
-                        # wait
-                        delay = max(0.01, float(duration) / max(0.001, float(speed)))
-                        waited = 0.0
-                        while waited < delay and not self._anim_stop.is_set():
-                            if self._anim_paused.is_set():
-                                time.sleep(min(0.05, delay - waited))
-                            else:
-                                time.sleep(min(0.05, delay - waited))
-                            waited += min(0.05, delay - waited)
-                    if not loop:
-                        break
-            except Exception:
-                log.exception('WLED JSON animation playback failed')
-            finally:
-                try:
-                    with self._anim_lock:
-                        self._anim_thread = None
-                        self._anim_stop.clear()
-                except Exception:
-                    pass
-
-        t = threading.Thread(target=_runner, daemon=True)
-        with self._anim_lock:
-            self._anim_thread = t
-            self._anim_stop.clear()
-            self._anim_paused.clear()
-            t.start()
-
     def stop_animation(self):
         try:
             with self._anim_lock:
@@ -492,14 +390,6 @@ class WS2812Plugin(BasePlugin):
             except Exception:
                 log.exception('legacy play_animation_from_gif failed; falling back')
         return super().play_animation_from_gif(path, speed=speed, loop=loop)
-
-    def play_wled_json(self, path: str, speed: float = 1.0, loop: bool = True):
-        if self._impl is not None and hasattr(self._impl, 'play_wled_json'):
-            try:
-                return self._impl.play_wled_json(path, speed=speed, loop=loop)
-            except Exception:
-                log.exception('legacy play_wled_json failed; falling back')
-        return super().play_wled_json(path, speed=speed, loop=loop)
 
     def stop_animation(self):
         if self._impl is not None and hasattr(self._impl, 'stop_animation'):
@@ -1028,13 +918,6 @@ class DisplayManager:
                 return self._plugin.play_animation_from_gif(path, speed=speed, loop=loop)
             except Exception:
                 log.exception('play_animation_from_gif failed on plugin')
-
-    def play_wled_json(self, path: str, speed: float = 1.0, loop: bool = True):
-        if self._plugin:
-            try:
-                return self._plugin.play_wled_json(path, speed=speed, loop=loop)
-            except Exception:
-                log.exception('play_wled_json failed on plugin')
 
     def stop_animation(self):
         if self._plugin:

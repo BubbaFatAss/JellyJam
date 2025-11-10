@@ -243,15 +243,11 @@ def _play_animation_safe(fname, loop=False, speed=1.0):
             except Exception:
                 pass
 
+            # Only support GIF animations
             if fname.lower().endswith('.gif'):
                 # respect provided speed and loop
                 try:
                     matrix.play_animation_from_gif(path, speed=speed, loop=loop)
-                except Exception:
-                    pass
-            elif fname.lower().endswith('.json') and hasattr(matrix, 'play_wled_json'):
-                try:
-                    matrix.play_wled_json(path)
                 except Exception:
                     pass
 
@@ -1585,9 +1581,9 @@ def spotify_config():
         cfg = storage.load()
         cfg.setdefault('spotify', {}).update(data)
         storage.save(cfg)
-        return redirect(url_for('spotify_config'))
-    cfg = storage.load()
-    return render_template('spotify.html', config=cfg)
+        return redirect(url_for('settings', saved=1))
+    # GET request - redirect to settings page
+    return redirect(url_for('settings'))
 
 
 @app.route('/spotify/connect')
@@ -1597,7 +1593,7 @@ def spotify_connect():
     client_secret = cfg.get('client_secret')
     redirect_uri = cfg.get('redirect_uri')
     if not (client_id and client_secret and redirect_uri):
-        return redirect(url_for('spotify_config'))
+        return redirect(url_for('settings', error='Please configure Spotify credentials first'))
     from spotipy.oauth2 import SpotifyOAuth
     sp_oauth = SpotifyOAuth(client_id=client_id, client_secret=client_secret, redirect_uri=redirect_uri, scope='user-modify-playback-state user-read-playback-state')
     auth_url = sp_oauth.get_authorize_url()
@@ -1615,7 +1611,7 @@ def spotify_callback():
     client_secret = cfg.get('client_secret')
     redirect_uri = cfg.get('redirect_uri')
     if not (client_id and client_secret and redirect_uri):
-        return redirect(url_for('spotify_config'))
+        return redirect(url_for('settings', error='Please configure Spotify credentials first'))
     from spotipy.oauth2 import SpotifyOAuth
     sp_oauth = SpotifyOAuth(client_id=client_id, client_secret=client_secret, redirect_uri=redirect_uri, scope='user-modify-playback-state user-read-playback-state')
     token_info = sp_oauth.get_access_token(code)
@@ -1623,7 +1619,7 @@ def spotify_callback():
     cfg_all = storage.load()
     cfg_all['spotify_token'] = token_info
     storage.save(cfg_all)
-    return redirect(url_for('spotify_config'))
+    return redirect(url_for('settings', saved=1))
 
 
 @app.route('/spotify/disconnect', methods=['POST'])
@@ -1632,7 +1628,7 @@ def spotify_disconnect():
     if 'spotify_token' in cfg_all:
         del cfg_all['spotify_token']
         storage.save(cfg_all)
-    return redirect(url_for('spotify_config'))
+    return redirect(url_for('settings', saved=1))
 
 
 @app.route('/mappings', methods=['GET', 'POST'])
@@ -1881,7 +1877,7 @@ def api_animations_list():
         import os
         for fn in os.listdir(animations_dir):
             # include GIFs and WLED-style JSON exports
-            if fn.lower().endswith('.gif') or fn.lower().endswith('.json'):
+            if fn.lower().endswith('.gif'):
                 files.append(fn)
         return jsonify({'animations': files})
     except Exception:
@@ -1895,61 +1891,15 @@ def api_animations_upload():
     f = request.files['file']
     if f.filename == '':
         return jsonify({'error': 'filename required'}), 400
-    # Accept GIF animations and WLED JSON exports
+    # Accept GIF animations only
     fname = f.filename or ''
-    if not (fname.lower().endswith('.gif') or fname.lower().endswith('.json')):
-        return jsonify({'error': 'only .gif or .json files allowed'}), 400
+    if not fname.lower().endswith('.gif'):
+        return jsonify({'error': 'only .gif files allowed'}), 400
     try:
         import werkzeug
         safe = werkzeug.utils.secure_filename(f.filename)
         dst = os.path.join(animations_dir, safe)
-        # If JSON, do a lightweight validation to ensure it's valid JSON.
-        # Accept WLED exports which may include leading comment lines (// ...) and
-        # may contain multiple concatenated JSON objects. We will strip // lines
-        # and attempt to parse one-or-more JSON objects from the file body.
-        if safe.lower().endswith('.json'):
-            try:
-                import json, re
-                # read full text
-                raw = f.stream.read()
-                # decode bytes to str if necessary
-                if isinstance(raw, bytes):
-                    try:
-                        text = raw.decode('utf-8')
-                    except Exception:
-                        text = raw.decode('utf-8', errors='replace')
-                else:
-                    text = str(raw)
-                # remove lines that are purely // comments (common in WLED exports)
-                text = re.sub(r'^\s*//.*$', '', text, flags=re.MULTILINE)
-                # try to parse one or more JSON objects from the text
-                decoder = json.JSONDecoder()
-                idx = 0
-                objs = []
-                text_len = len(text)
-                while True:
-                    # skip whitespace
-                    while idx < text_len and text[idx].isspace():
-                        idx += 1
-                    if idx >= text_len:
-                        break
-                    try:
-                        obj, end = decoder.raw_decode(text, idx)
-                        objs.append(obj)
-                        idx = end
-                    except ValueError:
-                        # failed to parse remaining text
-                        break
-                if len(objs) == 0:
-                    return jsonify({'error': 'invalid json file', 'details': 'no JSON objects found'}), 400
-                # Normalize and write a cleaned JSON file: single object if one, or an array if many.
-                to_write = objs[0] if len(objs) == 1 else objs
-                with open(dst, 'w', encoding='utf-8') as outf:
-                    json.dump(to_write, outf, indent=2, ensure_ascii=False)
-                return jsonify({'ok': True, 'filename': safe})
-            except Exception as e:
-                return jsonify({'error': 'invalid json file', 'details': str(e)}), 400
-        # Non-JSON files: save directly
+        # Save GIF file directly
         f.save(dst)
         return jsonify({'ok': True, 'filename': safe})
     except Exception as e:
@@ -1970,43 +1920,12 @@ def api_animations_play():
         loop = bool(data.get('loop', True))
         if matrix is None:
             return jsonify({'error': 'matrix not available'}), 500
-        # Support GIF animations and WLED JSON presets
+        # Support GIF animations only
         if name.lower().endswith('.gif'):
             try:
                 _play_animation_safe(name, loop=loop, speed=speed)
             except Exception:
                 pass
-        elif name.lower().endswith('.json'):
-            # try to parse and apply WLED JSON preset
-            try:
-                # prefer method name if available
-                if hasattr(matrix, 'play_wled_json'):
-                    try:
-                        _play_animation_safe(name, loop=loop, speed=speed)
-                    except Exception:
-                        pass
-                else:
-                    # fallback: use helper parser from module if present
-                    try:
-                        from .hardware.ledmatrix import parse_wled_json_from_file
-                        pix, bri = parse_wled_json_from_file(path, matrix.width * matrix.height)
-                        # set pixels under lock to avoid concurrent changes
-                        try:
-                            with _animation_lock:
-                                matrix.set_pixels(pix)
-                                if bri is not None:
-                                    try:
-                                        matrix.set_brightness(int(bri))
-                                    except Exception:
-                                        pass
-                                _last_animation['name'] = name
-                                _last_animation['started_at'] = time.time()
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        return jsonify({'error': 'failed to parse wled json', 'details': str(e)}), 500
-            except Exception as e:
-                return jsonify({'error': str(e)}), 500
         else:
             return jsonify({'error': 'unsupported file type'}), 400
         return jsonify({'ok': True})
