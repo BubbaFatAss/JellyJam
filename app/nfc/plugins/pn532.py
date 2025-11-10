@@ -75,7 +75,6 @@ class PN532Plugin(NFCReaderPlugin):
         """Initialize PN532 in I2C mode."""
         try:
             from py532lib.i2c import Pn532_i2c
-            from py532lib.constants import *
             
             # Get I2C configuration
             i2c_bus = self.config.get('i2c_bus', 1)
@@ -110,7 +109,6 @@ class PN532Plugin(NFCReaderPlugin):
         """Initialize PN532 in SPI mode."""
         try:
             from py532lib.spi import Pn532_spi
-            from py532lib.constants import *
             
             # Get SPI configuration
             spi_bus = self.config.get('spi_bus', 0)
