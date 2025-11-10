@@ -3,7 +3,18 @@
   <section class="panel">
     <h2>Mappings</h2>
     <form id="add-mapping" method="post" action="{{ url_for('mappings') }}">
-      <label>Card ID <input id="card-input" name="card_id"></label>
+      <label>Card
+        <select id="card-select" name="card_id" onchange="toggleManualCardId()">
+          <option value="">-- Select a registered card --</option>
+          {% for card_id, friendly_name in nfc_cards.items() %}
+            <option value="{{ card_id }}">{{ friendly_name }} ({{ card_id }})</option>
+          {% endfor %}
+          <option value="__manual__">⌨️ Enter Card ID Manually</option>
+        </select>
+      </label>
+      <div id="manual-card-id-wrapper" style="display:none;">
+        <label>Card ID <input id="card-input" name="manual_card_id"></label>
+      </div>
       <div id="add-error" role="alert" style="color:#b91c1c;display:none;margin-top:0.25rem"></div>
       <label>Type <select id="type" name="type"><option value="local">Local</option><option value="spotify">Spotify</option></select></label>
       <label>Volume override (0-100, leave blank for no override)
@@ -48,6 +59,21 @@
     </div>
   </section>
   <script>
+  function toggleManualCardId() {
+    const select = document.getElementById('card-select');
+    const manualWrapper = document.getElementById('manual-card-id-wrapper');
+    const manualInput = document.getElementById('card-input');
+    
+    if (select.value === '__manual__') {
+      manualWrapper.style.display = 'block';
+      manualInput.required = true;
+    } else {
+      manualWrapper.style.display = 'none';
+      manualInput.required = false;
+      manualInput.value = '';
+    }
+  }
+  
   (function(){
     // Helper: validate volume input element value (allow blank) and return normalized value or null
     function validateVolumeValue(val){
@@ -137,8 +163,21 @@
           const tdCard = document.createElement('td');
           tdCard.style.padding = '0.5rem';
           const strong = document.createElement('strong');
-          strong.innerText = m.card_id;
-          tdCard.appendChild(strong);
+          // Show friendly name if available, otherwise show card ID
+          if (m.card_friendly_name) {
+            strong.innerText = m.card_friendly_name;
+            const small = document.createElement('small');
+            small.style.display = 'block';
+            small.style.color = '#666';
+            small.style.fontWeight = 'normal';
+            small.style.fontFamily = 'monospace';
+            small.innerText = m.card_id;
+            tdCard.appendChild(strong);
+            tdCard.appendChild(small);
+          } else {
+            strong.innerText = m.card_id;
+            tdCard.appendChild(strong);
+          }
           tr.appendChild(tdCard);
           
           // Type column
@@ -262,7 +301,16 @@
       const type = document.getElementById('type').value;
       const sel = document.getElementById('playlist-select');
       const manual = document.getElementById('manual-path');
-      const card = document.getElementById('card-input').value.trim();
+      
+      // Get card ID from dropdown or manual input
+      const cardSelect = document.getElementById('card-select');
+      let card = '';
+      if (cardSelect.value === '__manual__') {
+        card = document.getElementById('card-input').value.trim();
+      } else {
+        card = cardSelect.value;
+      }
+      
       const addErrorEl = document.getElementById('add-error'); addErrorEl.style.display='none'; addErrorEl.innerText='';
       if(!card){ addErrorEl.innerText='Card ID cannot be empty'; addErrorEl.style.display='block'; return; }
       // prepare formdata
@@ -308,7 +356,9 @@
         if(res.ok){
           try{ showToast('Mapping added', 2500); }catch(e){}
           // clear form
+          document.getElementById('card-select').value = '';
           document.getElementById('card-input').value = '';
+          document.getElementById('manual-card-id-wrapper').style.display = 'none';
           document.getElementById('manual-path').value = '';
           if(volEl) volEl.value='';
           await refreshMappingsList();

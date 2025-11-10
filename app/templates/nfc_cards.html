@@ -1,0 +1,234 @@
+{% extends 'base.html' %}
+{% block title %}NFC Cards{% endblock %}
+{% block content %}
+<h2>NFC Card Management</h2>
+<p style="color:#666;margin-bottom:1.5rem;">
+  Register your NFC cards with friendly names for easier management and mapping.
+</p>
+
+<!-- Add Card Button -->
+<div style="margin-bottom:2rem;">
+  <button id="add-card-btn" onclick="showAddCardDialog()" style="padding:0.75rem 1.5rem;background:#0288d1;color:white;border:none;border-radius:4px;cursor:pointer;font-size:1rem;">
+    ➕ Add New Card
+  </button>
+</div>
+
+<!-- Card List -->
+<div id="card-list">
+  {% if nfc_cards %}
+    <table style="width:100%;border-collapse:collapse;background:white;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+      <thead>
+        <tr style="background:#f5f5f5;border-bottom:2px solid #ddd;">
+          <th style="padding:1rem;text-align:left;">Friendly Name</th>
+          <th style="padding:1rem;text-align:left;">Card ID</th>
+          <th style="padding:1rem;text-align:center;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for card_id, friendly_name in nfc_cards.items() %}
+        <tr style="border-bottom:1px solid #eee;">
+          <td style="padding:1rem;font-weight:500;">{{ friendly_name }}</td>
+          <td style="padding:1rem;font-family:monospace;color:#666;">{{ card_id }}</td>
+          <td style="padding:1rem;text-align:center;">
+            <form method="post" action="{{ url_for('delete_nfc_card') }}" style="display:inline;" onsubmit="return confirm('Delete card \'{{ friendly_name }}\'?');">
+              <input type="hidden" name="card_id" value="{{ card_id }}">
+              <button type="submit" style="background:#d32f2f;color:white;border:none;padding:0.5rem 1rem;border-radius:4px;cursor:pointer;">
+                🗑️ Delete
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div style="padding:2rem;background:#f9f9f9;border:2px dashed #ddd;border-radius:8px;text-align:center;color:#666;">
+      <p style="font-size:1.1rem;margin-bottom:0.5rem;">No NFC cards registered yet</p>
+      <p style="margin:0;">Click "Add New Card" to register your first card.</p>
+    </div>
+  {% endif %}
+</div>
+
+<!-- Add Card Dialog (Modal) -->
+<div id="add-card-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:white;padding:2rem;border-radius:8px;max-width:500px;width:90%;box-shadow:0 4px 6px rgba(0,0,0,0.3);">
+    <h3 style="margin-top:0;">Add New NFC Card</h3>
+    
+    <div id="scan-step" style="display:block;">
+      <div style="padding:2rem;background:#e3f2fd;border-radius:4px;text-align:center;margin-bottom:1.5rem;">
+        <div style="font-size:3rem;margin-bottom:1rem;">📱</div>
+        <p style="font-size:1.2rem;font-weight:500;margin-bottom:0.5rem;color:#0288d1;">
+          Scan your NFC card now
+        </p>
+        <p style="color:#666;margin:0;">
+          Hold your card near the NFC reader...
+        </p>
+      </div>
+      
+      <div id="scan-status" style="padding:1rem;background:#fff3cd;border-left:4px solid #ffc107;margin-bottom:1rem;display:none;">
+        <strong>Waiting for card...</strong>
+      </div>
+      
+      <div id="scan-success" style="padding:1rem;background:#d4edda;border-left:4px solid #28a745;margin-bottom:1rem;display:none;">
+        <strong>✓ Card detected!</strong>
+        <p style="margin:0.5rem 0 0 0;font-family:monospace;color:#155724;" id="detected-card-id"></p>
+      </div>
+      
+      <button onclick="startScanning()" id="start-scan-btn" style="width:100%;padding:0.75rem;background:#0288d1;color:white;border:none;border-radius:4px;cursor:pointer;margin-bottom:0.5rem;">
+        Start Scanning
+      </button>
+      
+      <button onclick="manualEntry()" style="width:100%;padding:0.75rem;background:#666;color:white;border:none;border-radius:4px;cursor:pointer;margin-bottom:0.5rem;">
+        Enter Card ID Manually
+      </button>
+      
+      <button onclick="hideAddCardDialog()" style="width:100%;padding:0.75rem;background:#ddd;color:#333;border:none;border-radius:4px;cursor:pointer;">
+        Cancel
+      </button>
+    </div>
+    
+    <form id="name-step" method="post" action="{{ url_for('add_nfc_card') }}" style="display:none;">
+      <div style="margin-bottom:1rem;">
+        <label for="card_id" style="display:block;margin-bottom:0.5rem;font-weight:500;">Card ID</label>
+        <input type="text" id="card_id" name="card_id" readonly required
+               style="width:100%;padding:0.75rem;border:1px solid #ddd;border-radius:4px;background:#f5f5f5;font-family:monospace;">
+      </div>
+      
+      <div style="margin-bottom:1.5rem;">
+        <label for="friendly_name" style="display:block;margin-bottom:0.5rem;font-weight:500;">Friendly Name</label>
+        <input type="text" id="friendly_name" name="friendly_name" required placeholder="e.g., John's Card, Blue Tag, Playlist 1"
+               style="width:100%;padding:0.75rem;border:1px solid #ddd;border-radius:4px;" autofocus>
+        <small style="color:#666;">Give this card a memorable name</small>
+      </div>
+      
+      <div style="display:flex;gap:0.5rem;">
+        <button type="submit" style="flex:1;padding:0.75rem;background:#28a745;color:white;border:none;border-radius:4px;cursor:pointer;">
+          💾 Save Card
+        </button>
+        <button type="button" onclick="hideAddCardDialog()" style="flex:1;padding:0.75rem;background:#ddd;color:#333;border:none;border-radius:4px;cursor:pointer;">
+          Cancel
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div style="margin-top:2rem;">
+  <a href="{{ url_for('index') }}" style="color:#0288d1;">← Back to Home</a>
+</div>
+
+<script>
+let scanCheckInterval = null;
+let lastCardCount = 0;
+
+function showAddCardDialog() {
+  document.getElementById('add-card-modal').style.display = 'flex';
+  document.getElementById('scan-step').style.display = 'block';
+  document.getElementById('name-step').style.display = 'none';
+  document.getElementById('scan-status').style.display = 'none';
+  document.getElementById('scan-success').style.display = 'none';
+}
+
+function hideAddCardDialog() {
+  document.getElementById('add-card-modal').style.display = 'none';
+  if (scanCheckInterval) {
+    clearInterval(scanCheckInterval);
+    scanCheckInterval = null;
+  }
+}
+
+function startScanning() {
+  document.getElementById('scan-status').style.display = 'block';
+  document.getElementById('start-scan-btn').disabled = true;
+  document.getElementById('start-scan-btn').textContent = 'Scanning...';
+  
+  // Poll for new scans
+  scanCheckInterval = setInterval(checkForNewScan, 500);
+  
+  // Auto-timeout after 30 seconds
+  setTimeout(() => {
+    if (scanCheckInterval) {
+      clearInterval(scanCheckInterval);
+      scanCheckInterval = null;
+      document.getElementById('scan-status').innerHTML = '<strong style="color:#d32f2f;">⚠️ Scan timeout. Please try again.</strong>';
+      document.getElementById('start-scan-btn').disabled = false;
+      document.getElementById('start-scan-btn').textContent = 'Start Scanning';
+    }
+  }, 30000);
+}
+
+function checkForNewScan() {
+  // Check if a new scan was detected via the /api/last-scan endpoint
+  fetch('/api/nfc/last-scan')
+    .then(r => r.json())
+    .then(data => {
+      if (data.card_id && data.timestamp > Date.now() - 5000) {
+        // Card scanned recently
+        cardDetected(data.card_id);
+      }
+    })
+    .catch(err => console.error('Error checking for scans:', err));
+}
+
+function cardDetected(cardId) {
+  if (scanCheckInterval) {
+    clearInterval(scanCheckInterval);
+    scanCheckInterval = null;
+  }
+  
+  document.getElementById('scan-status').style.display = 'none';
+  document.getElementById('scan-success').style.display = 'block';
+  document.getElementById('detected-card-id').textContent = cardId;
+  
+  setTimeout(() => {
+    proceedToNameEntry(cardId);
+  }, 1500);
+}
+
+function proceedToNameEntry(cardId) {
+  document.getElementById('scan-step').style.display = 'none';
+  document.getElementById('name-step').style.display = 'block';
+  document.getElementById('card_id').value = cardId;
+  document.getElementById('friendly_name').focus();
+}
+
+function manualEntry() {
+  const cardId = prompt('Enter card ID:');
+  if (cardId && cardId.trim()) {
+    proceedToNameEntry(cardId.trim());
+  }
+}
+
+// Close modal when clicking outside
+document.getElementById('add-card-modal').addEventListener('click', function(e) {
+  if (e.target === this) {
+    hideAddCardDialog();
+  }
+});
+</script>
+
+{% if saved %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  if (typeof showToast === 'function') {
+    showToast('Card saved successfully!', 2500);
+  } else {
+    alert('Card saved successfully!');
+  }
+});
+</script>
+{% endif %}
+
+{% if error %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  if (typeof showToast === 'function') {
+    showToast('{{ error|e }}', 3000);
+  } else {
+    alert('{{ error|e }}');
+  }
+});
+</script>
+{% endif %}
+
+{% endblock %}

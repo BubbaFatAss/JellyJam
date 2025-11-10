@@ -1083,6 +1083,97 @@ def settings_nfc():
         log.error('Error saving NFC settings: %s', e, exc_info=True)
         return redirect(url_for('settings', error=str(e)))
 
+@app.route('/nfc-cards')
+def nfc_cards():
+    """Display NFC card management page"""
+    cfg = storage.load()
+    nfc_cards = cfg.get('nfc_cards', {})
+    
+    saved = request.args.get('saved')
+    error = request.args.get('error')
+    
+    return render_template('nfc_cards.html', 
+                         nfc_cards=nfc_cards,
+                         saved=saved,
+                         error=error)
+
+@app.route('/nfc-cards/add', methods=['POST'])
+def add_nfc_card():
+    """Register a new NFC card with a friendly name"""
+    try:
+        card_id = request.form.get('card_id', '').strip()
+        friendly_name = request.form.get('friendly_name', '').strip()
+        
+        if not card_id:
+            return redirect(url_for('nfc_cards', error='Card ID is required'))
+        
+        if not friendly_name:
+            return redirect(url_for('nfc_cards', error='Friendly name is required'))
+        
+        # Load current config
+        cfg = storage.load()
+        nfc_cards = cfg.get('nfc_cards', {})
+        
+        # Check if friendly name already exists for a different card
+        for existing_id, existing_name in nfc_cards.items():
+            if existing_name.lower() == friendly_name.lower() and existing_id != card_id:
+                return redirect(url_for('nfc_cards', error=f'Friendly name "{friendly_name}" is already in use'))
+        
+        # Add or update card
+        nfc_cards[card_id] = friendly_name
+        cfg['nfc_cards'] = nfc_cards
+        
+        storage.save(cfg)
+        log.info('NFC card registered: %s -> %s', card_id, friendly_name)
+        
+        return redirect(url_for('nfc_cards', saved=1))
+    
+    except Exception as e:
+        log.error('Error adding NFC card: %s', e, exc_info=True)
+        return redirect(url_for('nfc_cards', error=str(e)))
+
+@app.route('/nfc-cards/delete', methods=['POST'])
+def delete_nfc_card():
+    """Delete a registered NFC card"""
+    try:
+        card_id = request.form.get('card_id', '').strip()
+        
+        if not card_id:
+            return redirect(url_for('nfc_cards', error='Card ID is required'))
+        
+        cfg = storage.load()
+        nfc_cards = cfg.get('nfc_cards', {})
+        
+        if card_id in nfc_cards:
+            friendly_name = nfc_cards[card_id]
+            del nfc_cards[card_id]
+            cfg['nfc_cards'] = nfc_cards
+            storage.save(cfg)
+            log.info('NFC card deleted: %s (%s)', card_id, friendly_name)
+        
+        return redirect(url_for('nfc_cards', saved=1))
+    
+    except Exception as e:
+        log.error('Error deleting NFC card: %s', e, exc_info=True)
+        return redirect(url_for('nfc_cards', error=str(e)))
+
+@app.route('/api/nfc/last-scan')
+def api_nfc_last_scan():
+    """API endpoint to get the last scanned card (for registration flow)"""
+    try:
+        # Check if there's a recent scan stored (we'll need to track this)
+        # For now, return placeholder - we'll need to store last scan in player
+        cfg = storage.load()
+        last_scan = cfg.get('_last_nfc_scan', {})
+        
+        return jsonify({
+            'card_id': last_scan.get('card_id'),
+            'timestamp': last_scan.get('timestamp', 0)
+        })
+    except Exception as e:
+        log.error('Error getting last scan: %s', e, exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 # create LED matrix mirror (in-memory buffer, hardware-backed when available)
 try:
     # Use new display manager which supports multiple plugin backends.
@@ -1550,7 +1641,12 @@ def mappings():
         cfg = storage.load()
         mappings = cfg.get('mappings', {})
         form = request.form
+        
+        # Handle card ID from dropdown or manual entry
         card = form.get('card_id', '').strip()
+        if card == '__manual__':
+            card = form.get('manual_card_id', '').strip()
+        
         if not card:
             # Do not create mappings with empty card id
             # If AJAX, return JSON error
@@ -1598,7 +1694,8 @@ def mappings():
             return jsonify({'ok': True, 'mapping': mappings[card]})
         return redirect(url_for('mappings'))
     cfg = storage.load()
-    return render_template('mappings.html', config=cfg)
+    nfc_cards = cfg.get('nfc_cards', {})
+    return render_template('mappings.html', config=cfg, nfc_cards=nfc_cards)
 
 
 @app.route('/mappings/delete', methods=['POST'])
@@ -1663,7 +1760,9 @@ def simulate():
             pass
         return jsonify({'ok': True})
     # GET -> render simulate page
-    return render_template('simulate.html')
+    cfg = storage.load()
+    nfc_cards = cfg.get('nfc_cards', {})
+    return render_template('simulate.html', nfc_cards=nfc_cards)
 
 
 @app.route('/status')
@@ -2234,11 +2333,13 @@ if _HAVE_SOCKETIO:
 def api_mappings():
     cfg = storage.load()
     mappings = cfg.get('mappings', {})
+    nfc_cards = cfg.get('nfc_cards', {})
     # For local mappings, try to provide friendly names using local base
     result = []
     for card, m in mappings.items():
         entry = {
             'card_id': card,
+            'card_friendly_name': nfc_cards.get(card),  # Add friendly name if available
             'type': m.get('type'),
             'id': m.get('id'),
             'shuffle': bool(m.get('shuffle')),

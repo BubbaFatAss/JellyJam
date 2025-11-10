@@ -2,9 +2,19 @@
 {% block content %}
   <section class="panel">
     <h2>Simulate NFC Scan</h2>
-    <label>Card ID <input id="card" placeholder="card id"></label>
+    <label>Card
+      <select id="card-select" onchange="updateSimulateCardId()">
+        <option value="">-- Select a registered card --</option>
+        {% for card_id, friendly_name in nfc_cards.items() %}
+          <option value="{{ card_id }}">{{ friendly_name }} ({{ card_id }})</option>
+        {% endfor %}
+        <option value="__manual__">⌨️ Enter Card ID Manually</option>
+      </select>
+    </label>
+    <div id="manual-card-wrapper" style="margin-top:0.5rem;">
+      <label>Card ID <input id="card" placeholder="card id"></label>
+    </div>
     <div class="form-actions"><button id="sim">Simulate</button></div>
-    <div id="result"></div>
   </section>
 
   <section class="panel">
@@ -19,11 +29,53 @@
   </section>
 
   <script>
+  function updateSimulateCardId() {
+    const select = document.getElementById('card-select');
+    const cardInput = document.getElementById('card');
+    
+    if (select.value && select.value !== '__manual__') {
+      cardInput.value = select.value;
+    } else if (select.value !== '__manual__') {
+      cardInput.value = '';
+    }
+  }
+  
   document.getElementById('sim').addEventListener('click', async () => {
     const card = document.getElementById('card').value;
-    const res = await fetch('/simulate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({card_id: card})});
-    const j = await res.json();
-    document.getElementById('result').innerText = JSON.stringify(j);
+    if (!card) {
+      if (typeof showToast === 'function') {
+        showToast('Please enter or select a card ID', 2500);
+      } else {
+        alert('Please enter or select a card ID');
+      }
+      return;
+    }
+    
+    try {
+      const res = await fetch('/simulate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({card_id: card})});
+      const j = await res.json();
+      
+      if (j.ok) {
+        if (typeof showToast === 'function') {
+          showToast(`✓ Simulated card scan: ${card}`, 2500);
+        } else {
+          alert('Simulated successfully');
+        }
+      } else {
+        if (typeof showToast === 'function') {
+          showToast(`Error: ${j.error || 'Simulation failed'}`, 3000);
+        } else {
+          alert(`Error: ${j.error || 'Simulation failed'}`);
+        }
+      }
+    } catch (err) {
+      console.error('Simulation error:', err);
+      if (typeof showToast === 'function') {
+        showToast('Network error during simulation', 3000);
+      } else {
+        alert('Network error during simulation');
+      }
+    }
   });
 
   async function loadQuickMappings(){
@@ -43,7 +95,9 @@
       for(const m of maps){
         const playlistName = (m.name && m.name.length>0)? m.name : (m.id || 'Unknown');
         const typeLabel = m.type === 'spotify' ? '🎵 Spotify' : '💿 Local';
-        const label = `[${m.card_id}] ${typeLabel}: ${playlistName}`;
+        // Show friendly name if available, otherwise card ID
+        const cardLabel = m.card_friendly_name ? `${m.card_friendly_name} (${m.card_id})` : m.card_id;
+        const label = `[${cardLabel}] ${typeLabel}: ${playlistName}`;
         select.appendChild(new Option(label, m.card_id));
       }
       document.getElementById('mapping-play').disabled = false;

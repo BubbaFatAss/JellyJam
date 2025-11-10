@@ -7,6 +7,13 @@
   </head>
   <body>
     <h1>JellyJam NFC Player</h1>
+    
+    <nav style="margin-bottom:2rem;padding:1rem;background:#f5f5f5;border-radius:4px;">
+      <a href="{{ url_for('index') }}" style="margin-right:1rem;text-decoration:none;color:#0288d1;">🏠 Home</a>
+      <a href="{{ url_for('nfc_cards') }}" style="margin-right:1rem;text-decoration:none;color:#0288d1;">📱 NFC Cards</a>
+      <a href="{{ url_for('settings') }}" style="text-decoration:none;color:#0288d1;">⚙️ Settings</a>
+    </nav>
+    
     <section>
       <h2>Spotify Configuration</h2>
       <form method="post" action="/spotify">
@@ -20,7 +27,18 @@
     <section>
       <h2>Mappings</h2>
       <form method="post" action="/mappings">
-        <label>Card ID <input name="card_id"></label><br>
+        <label>Card 
+          <select name="card_id" id="card-select" onchange="toggleManualCardId()">
+            <option value="">-- Select a registered card --</option>
+            {% for card_id, friendly_name in config.get('nfc_cards', {}).items() %}
+              <option value="{{ card_id }}">{{ friendly_name }} ({{ card_id }})</option>
+            {% endfor %}
+            <option value="__manual__">⌨️ Enter Card ID Manually</option>
+          </select>
+        </label><br>
+        <div id="manual-card-id" style="display:none;margin-top:0.5rem;">
+          <label>Card ID <input name="manual_card_id" id="manual-card-id-input"></label><br>
+        </div>
         <label>Type <select name="type"><option value="local">Local</option><option value="spotify">Spotify</option></select></label><br>
         <label>Playlist ID / Path <input name="playlist_id"></label><br>
         <button type="submit">Add Mapping</button>
@@ -29,7 +47,16 @@
       <h3>Existing mappings</h3>
       <ul>
         {% for cid, m in config.get('mappings', {}).items() %}
-          <li>{{ cid }} → {{ m.type }} : {{ m.id }}</li>
+          <li>
+            <strong>
+              {% if config.get('nfc_cards', {}).get(cid) %}
+                {{ config.get('nfc_cards', {})[cid] }}
+              {% else %}
+                {{ cid }}
+              {% endif %}
+            </strong>
+            ({{ cid }}) → {{ m.type }} : {{ m.id }}
+          </li>
         {% else %}
           <li>No mappings yet</li>
         {% endfor %}
@@ -38,10 +65,45 @@
 
     <section>
       <h2>Simulate NFC</h2>
-      <input id="card" placeholder="card id"><button id="sim">Simulate</button>
+      <label>Card 
+        <select id="sim-card-select" onchange="updateSimulateCardId()">
+          <option value="">-- Select a registered card --</option>
+          {% for card_id, friendly_name in config.get('nfc_cards', {}).items() %}
+            <option value="{{ card_id }}">{{ friendly_name }} ({{ card_id }})</option>
+          {% endfor %}
+          <option value="__manual__">⌨️ Enter Card ID Manually</option>
+        </select>
+      </label><br>
+      <div id="sim-manual-card-id" style="margin-top:0.5rem;">
+        <input id="card" placeholder="card id" style="margin-right:0.5rem;"><button id="sim">Simulate</button>
+      </div>
     </section>
 
     <script>
+    function toggleManualCardId() {
+      const select = document.getElementById('card-select');
+      const manualDiv = document.getElementById('manual-card-id');
+      const manualInput = document.getElementById('manual-card-id-input');
+      
+      if (select.value === '__manual__') {
+        manualDiv.style.display = 'block';
+        manualInput.required = true;
+      } else {
+        manualDiv.style.display = 'none';
+        manualInput.required = false;
+        manualInput.value = '';
+      }
+    }
+    
+    function updateSimulateCardId() {
+      const select = document.getElementById('sim-card-select');
+      const cardInput = document.getElementById('card');
+      
+      if (select.value && select.value !== '__manual__') {
+        cardInput.value = select.value;
+      }
+    }
+    
     document.getElementById('sim').addEventListener('click', async () => {
       const card = document.getElementById('card').value;
       const res = await fetch('/simulate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({card_id: card})});

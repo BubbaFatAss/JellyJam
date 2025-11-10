@@ -15,6 +15,15 @@ class Player:
 
     def handle_nfc(self, card_id):
         cfg = self.storage.load()
+        
+        # Track last scan for card registration flow
+        import time
+        cfg['_last_nfc_scan'] = {
+            'card_id': card_id,
+            'timestamp': int(time.time() * 1000)  # milliseconds since epoch
+        }
+        self.storage.save(cfg)
+        
         mapping = cfg.get('mappings', {}).get(card_id)
         if not mapping:
             print(f'No mapping for card {card_id}')
@@ -24,10 +33,14 @@ class Player:
         if self._state.get('playing'):
             current_source = self._state.get('source')
             new_source = mapping['type']
-            # Only stop if switching to a different source or different mapping
             current_card = self._state.get('mapping_card')
-            if current_source and (current_source != new_source or current_card != card_id):
-                # Save resume position before stopping (if current mapping has resume enabled)
+            
+            # Determine if we need to stop and restart
+            should_restart = (current_source != new_source or current_card != card_id)
+            
+            if should_restart:
+                # Always save resume position before stopping (if current mapping has resume enabled)
+                # This happens regardless of whether the new mapping has resume enabled
                 self._save_resume_position()
                 
                 print(f'Stopping {current_source} player before starting {new_source}')
@@ -44,6 +57,9 @@ class Player:
                         self.spotify.pause()
                     except Exception as e:
                         print(f'Error stopping Spotify player: {e}')
+            else:
+                # Same card scanned again - still save position for current mapping before restarting
+                self._save_resume_position()
         
         if mapping['type'] == 'local':
             print(f'Playing local playlist {mapping["id"]}')
