@@ -587,6 +587,11 @@ def settings():
         startup_animation_speed = request.form.get('startup_animation_speed', '1.0').strip()
         animation_dup_suppress_sec = request.form.get('animation_dup_suppress_sec', '0.5').strip()
         
+        # Get volume bar settings from form
+        volume_bar_duration_ms = request.form.get('volume_bar_duration_ms', '1.5').strip()
+        volume_bar_color = request.form.get('volume_bar_color', '#00FF00').strip()
+        volume_bar_mode = request.form.get('volume_bar_mode', 'overlay').strip()
+        
         # Validate and convert startup animation settings
         try:
             startup_animation_speed = float(startup_animation_speed)
@@ -601,6 +606,15 @@ def settings():
                 animation_dup_suppress_sec = 0.5
         except (ValueError, TypeError):
             animation_dup_suppress_sec = 0.5
+        
+        # Validate and convert volume bar settings
+        try:
+            volume_bar_duration_s = float(volume_bar_duration_ms)
+            volume_bar_duration_ms_int = int(volume_bar_duration_s * 1000)
+            if volume_bar_duration_ms_int < 0:
+                volume_bar_duration_ms_int = 1500
+        except (ValueError, TypeError):
+            volume_bar_duration_ms_int = 1500
 
         cfg['display'] = {
             'active': active, 
@@ -608,7 +622,10 @@ def settings():
             'play_startup_animation': play_startup_animation,
             'startup_animation_name': startup_animation_name,
             'startup_animation_speed': startup_animation_speed,
-            'animation_dup_suppress_sec': animation_dup_suppress_sec
+            'animation_dup_suppress_sec': animation_dup_suppress_sec,
+            'volume_bar_duration_ms': volume_bar_duration_ms_int,
+            'volume_bar_color': volume_bar_color,
+            'volume_bar_mode': volume_bar_mode
         }
         try:
             storage.save(cfg)

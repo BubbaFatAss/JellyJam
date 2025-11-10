@@ -33,26 +33,6 @@
       <input id="display-brightness" type="range" min="0" max="100" value="25" style="width:240px">
       <span id="display-brightness-val" style="min-width:36px;text-align:right">25%</span>
       <div style="margin-left:1rem;font-size:0.9rem;color:#666">Mode: <strong id="rotary2-mode">skip</strong></div>
-      <div style="margin-left:1rem; display:flex; align-items:center; gap:.4rem; font-size:0.9rem; color:#666">
-        <label for="volume-bar-duration">Volume bar timeout</label>
-        <input id="volume-bar-duration" type="number" step="0.1" min="0" style="width:80px"
-          value="{{ (config.get('display', {}).get('volume_bar_duration_ms', 1500) / 1000) }}">
-        <span style="font-size:0.85rem;color:#999">s</span>
-      </div>
-      <div style="margin-left:.6rem; display:flex; align-items:center; gap:.4rem; font-size:0.9rem; color:#666">
-        <label for="volume-bar-color">Bar color</label>
-        <input id="volume-bar-color" type="color" value="{{ config.get('display', {}).get('volume_bar_color', '#00FF00') }}" style="width:48px;height:28px;padding:0;border:0">
-        <label for="volume-bar-mode" style="margin-left:.4rem">Mode</label>
-        <select id="volume-bar-mode" style="width:110px">
-          <option value="overlay">Overlay</option>
-          <option value="pause">Pause animations</option>
-        </select>
-      </div>
-      <div style="margin-left:.6rem; display:flex; align-items:center; gap:.4rem; font-size:0.9rem; color:#666">
-        <label for="volume-bar-preview-value">Preview vol</label>
-        <input id="volume-bar-preview-value" type="number" min="0" max="100" value="50" style="width:64px">
-        <button id="volume-bar-preview" style="padding:.2rem .5rem">Preview</button>
-      </div>
     </div>
     <div style="margin-top:1rem;display:flex;gap:1rem;align-items:center;">
       <form id="animation-upload-form" style="display:flex;gap:.5rem;align-items:center">
@@ -389,59 +369,6 @@
   
   // Load display power state on page load
   loadDisplayPower();
-
-  // Volume bar duration handling
-  const volDurEl = document.getElementById('volume-bar-duration');
-  const volColorEl = document.getElementById('volume-bar-color');
-  const volModeEl = document.getElementById('volume-bar-mode');
-  let volDurTimeout = null;
-  async function loadVolumeBarDuration(){
-    try{
-      const r = await fetch('/api/display/volume_bar_duration');
-      if(!r.ok) return;
-      const j = await r.json();
-      if(typeof j.volume_bar_duration_s === 'number'){
-        volDurEl.value = j.volume_bar_duration_s;
-        if(typeof j.volume_bar_color === 'string' && volColorEl) volColorEl.value = j.volume_bar_color;
-        if(typeof j.volume_bar_mode === 'string' && volModeEl) volModeEl.value = j.volume_bar_mode;
-      }
-    }catch(e){ }
-  }
-  function saveVolumeSettingsDebounced(){
-    if(volDurTimeout) clearTimeout(volDurTimeout);
-    volDurTimeout = setTimeout(async ()=>{
-      try{
-        const sec = Number(volDurEl.value) || 0;
-        const color = volColorEl ? volColorEl.value : undefined;
-        const mode = volModeEl ? volModeEl.value : undefined;
-        await fetch('/api/display/volume_bar_duration', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({seconds: sec, color: color, mode: mode})});
-        showToast('Saved volume bar settings');
-      }catch(e){ showToast('Failed to save volume bar settings'); }
-    }, 300);
-  }
-  volDurEl.addEventListener('input', saveVolumeSettingsDebounced);
-  if(volColorEl) volColorEl.addEventListener('input', saveVolumeSettingsDebounced);
-  if(volModeEl) volModeEl.addEventListener('change', saveVolumeSettingsDebounced);
-  loadVolumeBarDuration();
-
-  // Preview button handler
-  const volPreviewBtn = document.getElementById('volume-bar-preview');
-  const volPreviewVal = document.getElementById('volume-bar-preview-value');
-  if(volPreviewBtn){
-    volPreviewBtn.addEventListener('click', async ()=>{
-      try{
-        const sec = Number(volDurEl.value) || 0;
-        const color = volColorEl ? volColorEl.value : undefined;
-        const mode = volModeEl ? volModeEl.value : undefined;
-        const vol = volPreviewVal ? Number(volPreviewVal.value)||0 : 50;
-        const payload = { seconds: sec, color: color, mode: mode, volume: vol };
-        const r = await fetch('/api/display/volume_bar_preview', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)});
-        const j = await r.json();
-        if(!r.ok) return showToast('Preview failed: '+(j.error||r.status));
-        showToast('Preview shown');
-      }catch(e){ showToast('Preview failed'); }
-    });
-  }
 
   // Try to use Socket.IO for rotary2 mode updates; fall back to polling
   (async function(){
