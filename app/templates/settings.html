@@ -14,6 +14,7 @@
   <button type="button" id="main-tab-local-music" class="tab-btn">Local Music</button>
   <button type="button" id="main-tab-nfc" class="tab-btn">NFC</button>
   <button type="button" id="main-tab-spotify" class="tab-btn">Spotify</button>
+  <button type="button" id="main-tab-audible" class="tab-btn">Audible</button>
 </div>
 
 <!-- Display Tab -->
@@ -714,9 +715,61 @@
   </form>
 </div>
 
+<!-- Audible Tab -->
+<div id="audible-tab-content" style="display:none;">
+  <h3>Audible Authentication</h3>
+  
+  <div class="settings-group">
+    <h4>Authentication Status</h4>
+    <div id="audible-auth-status" style="margin-bottom:1rem;">
+      <span id="audible-auth-status-text">Checking authentication...</span>
+    </div>
+    
+    <div id="audible-login-form" style="display:none;">
+      <form id="audible-login" onsubmit="return false;" style="display:flex;flex-direction:column;gap:0.75rem;max-width:500px;">
+        <label>Email/Username
+          <input id="audible-username" type="text" required>
+        </label>
+        
+        <label>Password
+          <input id="audible-password" type="password" required>
+        </label>
+        
+        <label>Country Code
+          <select id="audible-country">
+            <option value="us">United States (us)</option>
+            <option value="uk">United Kingdom (uk)</option>
+            <option value="de">Germany (de)</option>
+            <option value="fr">France (fr)</option>
+            <option value="ca">Canada (ca)</option>
+            <option value="au">Australia (au)</option>
+            <option value="in">India (in)</option>
+            <option value="jp">Japan (jp)</option>
+          </select>
+        </label>
+        
+        <div id="audible-otp-section" style="display:none;">
+          <label>Two-Factor Authentication Code
+            <input id="audible-otp" type="text" placeholder="Enter 6-digit code" maxlength="6" pattern="[0-9]{6}">
+          </label>
+        </div>
+        
+        <div style="margin-top:0.5rem;">
+          <button type="submit" id="audible-login-btn" style="background:#1db954;color:white;">Login to Audible</button>
+        </div>
+      </form>
+    </div>
+    
+    <div id="audible-logout-section" style="display:none;">
+      <p style="color:#28a745;font-weight:500;">✓ Connected to Audible</p>
+      <button type="button" id="audible-logout-btn" class="danger">Logout from Audible</button>
+    </div>
+  </div>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function(){
-  // Main tab switching (Display vs Lighting vs Artwork vs MQTT vs Logging vs Controls vs Local Music vs NFC vs Spotify)
+  // Main tab switching (Display vs Lighting vs Artwork vs MQTT vs Logging vs Controls vs Local Music vs NFC vs Spotify vs Audible)
   const mainTabDisplay = document.getElementById('main-tab-display');
   const mainTabLighting = document.getElementById('main-tab-lighting');
   const mainTabArtwork = document.getElementById('main-tab-artwork');
@@ -726,6 +779,7 @@ document.addEventListener('DOMContentLoaded', function(){
   const mainTabLocalMusic = document.getElementById('main-tab-local-music');
   const mainTabNfc = document.getElementById('main-tab-nfc');
   const mainTabSpotify = document.getElementById('main-tab-spotify');
+  const mainTabAudible = document.getElementById('main-tab-audible');
   const displayTabContent = document.getElementById('display-tab-content');
   const lightingTabContent = document.getElementById('lighting-tab-content');
   const artworkTabContent = document.getElementById('artwork-tab-content');
@@ -735,6 +789,7 @@ document.addEventListener('DOMContentLoaded', function(){
   const localMusicTabContent = document.getElementById('local-music-tab-content');
   const nfcTabContent = document.getElementById('nfc-tab-content');
   const spotifyTabContent = document.getElementById('spotify-tab-content');
+  const audibleTabContent = document.getElementById('audible-tab-content');
   
   function showMainTab(tab) {
     // Hide all tabs
@@ -747,6 +802,7 @@ document.addEventListener('DOMContentLoaded', function(){
     localMusicTabContent.style.display = 'none';
     nfcTabContent.style.display = 'none';
     spotifyTabContent.style.display = 'none';
+    audibleTabContent.style.display = 'none';
     mainTabDisplay.classList.remove('active');
     mainTabLighting.classList.remove('active');
     mainTabArtwork.classList.remove('active');
@@ -756,6 +812,7 @@ document.addEventListener('DOMContentLoaded', function(){
     mainTabLocalMusic.classList.remove('active');
     mainTabNfc.classList.remove('active');
     mainTabSpotify.classList.remove('active');
+    mainTabAudible.classList.remove('active');
     
     // Show selected tab
     if (tab === 'lighting') {
@@ -786,6 +843,10 @@ document.addEventListener('DOMContentLoaded', function(){
       spotifyTabContent.style.display = '';
       mainTabSpotify.classList.add('active');
       loadSpotifyDevices();  // Load Spotify devices
+    } else if (tab === 'audible') {
+      audibleTabContent.style.display = '';
+      mainTabAudible.classList.add('active');
+      checkAudibleAuthStatus();  // Check Audible authentication status
     } else {
       displayTabContent.style.display = '';
       mainTabDisplay.classList.add('active');
@@ -801,6 +862,33 @@ document.addEventListener('DOMContentLoaded', function(){
   mainTabLocalMusic.addEventListener('click', () => showMainTab('local-music'));
   mainTabNfc.addEventListener('click', () => showMainTab('nfc'));
   mainTabSpotify.addEventListener('click', () => showMainTab('spotify'));
+  mainTabAudible.addEventListener('click', () => showMainTab('audible'));
+  
+  // Handle URL hash for direct tab linking (e.g., #audible)
+  if (window.location.hash) {
+    const hash = window.location.hash.substring(1);
+    if (hash === 'audible') {
+      showMainTab('audible');
+    } else if (hash === 'spotify') {
+      showMainTab('spotify');
+    } else if (hash === 'display') {
+      showMainTab('display');
+    } else if (hash === 'lighting') {
+      showMainTab('lighting');
+    } else if (hash === 'artwork') {
+      showMainTab('artwork');
+    } else if (hash === 'mqtt') {
+      showMainTab('mqtt');
+    } else if (hash === 'logging') {
+      showMainTab('logging');
+    } else if (hash === 'controls') {
+      showMainTab('controls');
+    } else if (hash === 'local-music') {
+      showMainTab('local-music');
+    } else if (hash === 'nfc') {
+      showMainTab('nfc');
+    }
+  }
   
   // Load artwork cache info
   function loadArtworkInfo() {
@@ -1085,6 +1173,100 @@ document.addEventListener('DOMContentLoaded', function(){
       await loadSpotifyDevices(); 
       if (typeof showToast === 'function') {
         showToast('Devices refreshed', 2000);
+      }
+    });
+  }
+  
+  // Audible authentication functions
+  async function checkAudibleAuthStatus() {
+    try {
+      const r = await fetch('/api/audible/auth/status');
+      const j = await r.json();
+      const isAuthenticated = j.authenticated || false;
+      const needsReauth = j.needs_reauthentication || false;
+      
+      if (isAuthenticated) {
+        document.getElementById('audible-auth-status-text').innerText = '✓ Authenticated';
+        document.getElementById('audible-login-form').style.display = 'none';
+        document.getElementById('audible-logout-section').style.display = 'block';
+      } else {
+        if (needsReauth) {
+          document.getElementById('audible-auth-status-text').innerText = '⚠ Authentication expired - please log in again';
+        } else {
+          document.getElementById('audible-auth-status-text').innerText = '✗ Not authenticated';
+        }
+        document.getElementById('audible-login-form').style.display = 'block';
+        document.getElementById('audible-logout-section').style.display = 'none';
+      }
+    } catch(e) {
+      document.getElementById('audible-auth-status-text').innerText = 'Error checking auth status';
+    }
+  }
+  
+  // Audible login form submission
+  const audibleLoginForm = document.getElementById('audible-login');
+  if (audibleLoginForm) {
+    audibleLoginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('audible-username').value;
+      const password = document.getElementById('audible-password').value;
+      const country_code = document.getElementById('audible-country').value;
+      const otp_code = document.getElementById('audible-otp').value || null;
+      
+      try {
+        if (typeof showToast === 'function') {
+          showToast('Authenticating with Audible...');
+        }
+        const r = await fetch('/api/audible/auth/login', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({username, password, country_code, otp_code})
+        });
+        const j = await r.json();
+        
+        if (j.success) {
+          if (typeof showToast === 'function') {
+            showToast('Authentication successful!');
+          }
+          document.getElementById('audible-password').value = '';
+          document.getElementById('audible-otp').value = '';
+          document.getElementById('audible-otp-section').style.display = 'none';
+          checkAudibleAuthStatus();
+        } else if (j.requires_otp) {
+          if (typeof showToast === 'function') {
+            showToast('Two-factor authentication required. Please enter your code.', 5000);
+          }
+          document.getElementById('audible-otp-section').style.display = 'block';
+          document.getElementById('audible-otp').focus();
+        } else {
+          if (typeof showToast === 'function') {
+            showToast('Authentication failed: ' + (j.error || 'Unknown error'), 5000);
+          }
+          document.getElementById('audible-otp-section').style.display = 'none';
+          document.getElementById('audible-otp').value = '';
+        }
+      } catch(e) {
+        if (typeof showToast === 'function') {
+          showToast('Authentication failed: ' + e.message, 5000);
+        }
+      }
+    });
+  }
+  
+  // Audible logout button
+  const audibleLogoutBtn = document.getElementById('audible-logout-btn');
+  if (audibleLogoutBtn) {
+    audibleLogoutBtn.addEventListener('click', async () => {
+      try {
+        await fetch('/api/audible/auth/logout', {method: 'POST'});
+        if (typeof showToast === 'function') {
+          showToast('Logged out');
+        }
+        checkAudibleAuthStatus();
+      } catch(e) {
+        if (typeof showToast === 'function') {
+          showToast('Logout failed: ' + e.message);
+        }
       }
     });
   }

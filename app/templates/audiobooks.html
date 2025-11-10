@@ -2,52 +2,15 @@
 {% block content %}
   <section class="panel">
     <h2>Audiobooks</h2>
-    <p>Download and convert Audible audiobooks to M4B format.</p>
-
-    <!-- Authentication Section -->
-    <div id="auth-section" style="margin-bottom:2rem;">
-      <h3>Audible Authentication</h3>
-      <div id="auth-status" style="margin-bottom:1rem;">
-        <span id="auth-status-text">Checking authentication...</span>
-      </div>
-      
-      <div id="login-form" style="display:none;">
-        <form id="audible-login" style="display:flex;flex-direction:column;gap:0.5rem;max-width:400px;">
-          <label for="audible-username">Email/Username</label>
-          <input id="audible-username" type="text" required>
-          
-          <label for="audible-password">Password</label>
-          <input id="audible-password" type="password" required>
-          
-          <label for="audible-country">Country Code</label>
-          <select id="audible-country">
-            <option value="us">United States (us)</option>
-            <option value="uk">United Kingdom (uk)</option>
-            <option value="de">Germany (de)</option>
-            <option value="fr">France (fr)</option>
-            <option value="ca">Canada (ca)</option>
-            <option value="au">Australia (au)</option>
-            <option value="in">India (in)</option>
-            <option value="jp">Japan (jp)</option>
-          </select>
-          
-          <div id="otp-section" style="display:none;margin-top:0.5rem;">
-            <label for="audible-otp">Two-Factor Authentication Code</label>
-            <input id="audible-otp" type="text" placeholder="Enter 6-digit code" maxlength="6" pattern="[0-9]{6}">
-          </div>
-          
-          <button type="submit" style="margin-top:0.5rem;">Login to Audible</button>
-        </form>
-      </div>
-      
-      <div id="logout-section" style="display:none;">
-        <button id="logout-btn">Logout</button>
-      </div>
-    </div>
+    <p>Download and convert Audible audiobooks to M4B format. Configure authentication in <a href="{{ url_for('settings') }}#audible" style="color:#0288d1;text-decoration:underline;">Settings → Audible</a>.</p>
 
     <!-- Library Browser -->
-    <div id="library-section" style="display:none;margin-bottom:2rem;">
+    <div id="library-section" style="margin-bottom:2rem;">
       <h3>Your Audible Library</h3>
+      <div id="auth-message" style="display:none;padding:1rem;background:#fff3cd;border-left:4px solid #ffc107;margin-bottom:1rem;">
+        <strong>⚠ Not authenticated</strong>
+        <p style="margin:0.5rem 0 0 0;">Please <a href="{{ url_for('settings') }}#audible" style="color:#0288d1;text-decoration:underline;">sign in to Audible</a> to view your library.</p>
+      </div>
       <button id="refresh-library" style="margin-bottom:1rem;">Refresh Library</button>
       
       <div id="library-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:1rem;"></div>
@@ -134,80 +97,25 @@
         const r = await fetch('/api/audible/auth/status');
         const j = await r.json();
         isAuthenticated = j.authenticated || false;
-        const needsReauth = j.needs_reauthentication || false;
         
         if (isAuthenticated) {
-          document.getElementById('auth-status-text').innerText = '✓ Authenticated';
-          document.getElementById('login-form').style.display = 'none';
-          document.getElementById('logout-section').style.display = 'block';
-          document.getElementById('library-section').style.display = 'block';
+          document.getElementById('auth-message').style.display = 'none';
           loadLibrary();
         } else {
-          if (needsReauth) {
-            document.getElementById('auth-status-text').innerText = '⚠ Authentication expired - please log in again';
-            showToast('Authentication expired. Please log in again.', 5000);
-          } else {
-            document.getElementById('auth-status-text').innerText = '✗ Not authenticated';
-          }
-          document.getElementById('login-form').style.display = 'block';
-          document.getElementById('logout-section').style.display = 'none';
-          document.getElementById('library-section').style.display = 'none';
+          document.getElementById('auth-message').style.display = 'block';
+          document.getElementById('library-list').innerHTML = '';
         }
       } catch(e) {
-        document.getElementById('auth-status-text').innerText = 'Error checking auth status';
+        console.error('Error checking auth status:', e);
+        document.getElementById('auth-message').style.display = 'block';
       }
     }
 
-    document.getElementById('audible-login').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const username = document.getElementById('audible-username').value;
-      const password = document.getElementById('audible-password').value;
-      const country_code = document.getElementById('audible-country').value;
-      const otp_code = document.getElementById('audible-otp').value || null;
-      
-      try {
-        showToast('Authenticating with Audible...');
-        const r = await fetch('/api/audible/auth/login', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({username, password, country_code, otp_code})
-        });
-        const j = await r.json();
-        
-        if (j.success) {
-          showToast('Authentication successful!');
-          document.getElementById('audible-password').value = '';
-          document.getElementById('audible-otp').value = '';
-          document.getElementById('otp-section').style.display = 'none';
-          checkAuthStatus();
-        } else if (j.requires_otp) {
-          // Show OTP field if 2FA is required
-          showToast('Two-factor authentication required. Please enter your code.', 5000);
-          document.getElementById('otp-section').style.display = 'block';
-          document.getElementById('audible-otp').focus();
-        } else {
-          showToast('Authentication failed: ' + (j.error || 'Unknown error'), 5000);
-          // Hide OTP field on error
-          document.getElementById('otp-section').style.display = 'none';
-          document.getElementById('audible-otp').value = '';
-        }
-      } catch(e) {
-        showToast('Authentication failed: ' + e.message, 5000);
-      }
-    });
-
-    document.getElementById('logout-btn').addEventListener('click', async () => {
-      try {
-        await fetch('/api/audible/auth/logout', {method: 'POST'});
-        showToast('Logged out');
-        checkAuthStatus();
-      } catch(e) {
-        showToast('Logout failed: ' + e.message);
-      }
-    });
-
     async function loadLibrary(page = 1) {
-      if (!isAuthenticated) return;
+      if (!isAuthenticated) {
+        document.getElementById('auth-message').style.display = 'block';
+        return;
+      }
       
       try {
         const r = await fetch(`/api/audible/library?page=${page}&num_results=20`);
