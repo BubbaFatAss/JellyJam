@@ -179,8 +179,13 @@ import threading, time
 _animation_lock = threading.Lock()
 # record last played animation name and timestamp to suppress rapid duplicates
 _last_animation = {'name': None, 'started_at': 0.0}
-# how many seconds to ignore repeated plays of the same animation
-_DUPLICATE_SUPPRESSION_SEC = float(os.environ.get('ANIMATION_DUP_SUPPRESS_SEC', '0.5'))
+# how many seconds to ignore repeated plays of the same animation - load from config with env fallback
+try:
+    _cfg = storage.load() or {}
+    _display_cfg = _cfg.get('display', {})
+    _DUPLICATE_SUPPRESSION_SEC = float(_display_cfg.get('animation_dup_suppress_sec', os.environ.get('ANIMATION_DUP_SUPPRESS_SEC', '0.5')))
+except Exception:
+    _DUPLICATE_SUPPRESSION_SEC = float(os.environ.get('ANIMATION_DUP_SUPPRESS_SEC', '0.5'))
 
 def _play_animation_safe(fname, loop=False, speed=1.0):
     """Start or stop an animation in a thread-safe way.
@@ -567,7 +572,35 @@ def settings():
         if verrs:
             return render_template('settings.html', display_cfg=disp, saved=False, plugins_json=json.dumps(plugins, indent=2), error='; '.join(verrs))
 
-        cfg['display'] = {'active': active, 'plugins': plugins}
+        # Get startup animation settings from form
+        play_startup_animation = request.form.get('play_startup_animation') == 'on'
+        startup_animation_name = request.form.get('startup_animation_name', 'startup.gif').strip()
+        startup_animation_speed = request.form.get('startup_animation_speed', '1.0').strip()
+        animation_dup_suppress_sec = request.form.get('animation_dup_suppress_sec', '0.5').strip()
+        
+        # Validate and convert startup animation settings
+        try:
+            startup_animation_speed = float(startup_animation_speed)
+            if startup_animation_speed < 0.1 or startup_animation_speed > 10:
+                startup_animation_speed = 1.0
+        except (ValueError, TypeError):
+            startup_animation_speed = 1.0
+        
+        try:
+            animation_dup_suppress_sec = float(animation_dup_suppress_sec)
+            if animation_dup_suppress_sec < 0 or animation_dup_suppress_sec > 10:
+                animation_dup_suppress_sec = 0.5
+        except (ValueError, TypeError):
+            animation_dup_suppress_sec = 0.5
+
+        cfg['display'] = {
+            'active': active, 
+            'plugins': plugins,
+            'play_startup_animation': play_startup_animation,
+            'startup_animation_name': startup_animation_name,
+            'startup_animation_speed': startup_animation_speed,
+            'animation_dup_suppress_sec': animation_dup_suppress_sec
+        }
         try:
             storage.save(cfg)
         except Exception:
@@ -613,7 +646,10 @@ def settings():
     # Get Controls config
     controls_cfg = cfg.get('controls', {})
     
-    return render_template('settings.html', display_cfg=disp, saved=saved_flag, plugins_json=plugins_json, mqtt_cfg=mqtt_cfg, lighting_cfg=lighting_cfg, logging_cfg=logging_cfg, controls_cfg=controls_cfg)
+    # Get Local Music config
+    local_music_cfg = cfg.get('local_music', {})
+    
+    return render_template('settings.html', display_cfg=disp, saved=saved_flag, plugins_json=plugins_json, mqtt_cfg=mqtt_cfg, lighting_cfg=lighting_cfg, logging_cfg=logging_cfg, controls_cfg=controls_cfg, local_music_cfg=local_music_cfg)
 
 @app.route('/api/artwork/info', methods=['GET'])
 def artwork_info():
@@ -883,6 +919,33 @@ def save_controls_settings():
         log.error('Error saving controls settings: %s', e, exc_info=True)
         return redirect(url_for('settings', error=str(e)))
 
+@app.route('/settings/local-music', methods=['POST'])
+def settings_local_music():
+    """Save local music configuration."""
+    try:
+        cfg = storage.load() or {}
+        
+        music_directory = request.form.get('music_directory', '').strip()
+        
+        # Validate directory path
+        if not music_directory:
+            return redirect(url_for('settings', error='Music directory cannot be empty'))
+        
+        # Save configuration
+        local_music_cfg = {
+            'music_directory': music_directory
+        }
+        
+        cfg['local_music'] = local_music_cfg
+        storage.save(cfg)
+        
+        log.info('Local music settings saved. Restart required for changes to take effect.')
+        
+        return redirect(url_for('settings', saved=1))
+    except Exception as e:
+        log.error('Error saving local music settings: %s', e, exc_info=True)
+        return redirect(url_for('settings', error=str(e)))
+
 # create LED matrix mirror (in-memory buffer, hardware-backed when available)
 try:
     # Use new display manager which supports multiple plugin backends.
@@ -922,10 +985,19 @@ try:
         pass
     # Play a small startup animation if requested (default: enabled)
     try:
-        play_startup = os.environ.get('PLAY_STARTUP_ANIMATION', '1')
-        if str(play_startup).lower() in ('1', 'true', 'yes', 'on'):
+        # Load startup animation settings from config with env fallback
+        try:
+            _startup_cfg = storage.load() or {}
+            _startup_display_cfg = _startup_cfg.get('display', {})
+            play_startup = _startup_display_cfg.get('play_startup_animation', os.environ.get('PLAY_STARTUP_ANIMATION', '1'))
+            startup_name = _startup_display_cfg.get('startup_animation_name', os.environ.get('STARTUP_ANIMATION_NAME', 'startup.gif'))
+            startup_speed = float(_startup_display_cfg.get('startup_animation_speed', os.environ.get('STARTUP_ANIMATION_SPEED', '1.0')))
+        except Exception:
+            play_startup = os.environ.get('PLAY_STARTUP_ANIMATION', '1')
             startup_name = os.environ.get('STARTUP_ANIMATION_NAME', 'startup.gif')
             startup_speed = float(os.environ.get('STARTUP_ANIMATION_SPEED', '1.0') or 1.0)
+        
+        if str(play_startup).lower() in ('1', 'true', 'yes', 'on'):
             startup_loop = False
             # ensure the app static animations dir exists and place the startup
             # animation there so it cannot be overwritten/deleted through the

@@ -5,16 +5,30 @@ import logging
 
 
 class LocalPlayer:
-    def __init__(self):
+    def __init__(self, storage=None):
         self.instance = vlc.Instance()
         self.player = self.instance.media_list_player_new()
         self.media_list = self.instance.media_list_new()
-        # default base music directory: allow override via MUSIC_BASE env var,
+        # default base music directory: load from config with env var fallback
         # otherwise resolve relative to the repository root so behavior is
         # consistent regardless of the current working directory used to run
         # the server.
         import os
-        env_base = os.environ.get('MUSIC_BASE') or os.environ.get('MUSIC_DIR')
+        env_base = None
+        
+        # Try to load from config first
+        if storage:
+            try:
+                cfg = storage.load() or {}
+                local_music_cfg = cfg.get('local_music', {})
+                env_base = local_music_cfg.get('music_directory')
+            except Exception:
+                pass
+        
+        # Fallback to environment variables
+        if not env_base:
+            env_base = os.environ.get('MUSIC_BASE') or os.environ.get('MUSIC_DIR')
+        
         if env_base:
             self.base = os.path.abspath(env_base)
         else:

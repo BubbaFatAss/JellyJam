@@ -7,7 +7,7 @@ from .spotify_player import SpotifyPlayer
 class Player:
     def __init__(self, storage):
         self.storage = storage
-        self.local = LocalPlayer()
+        self.local = LocalPlayer(storage)
         self.spotify = SpotifyPlayer(storage)
         self._state = {'playing': False, 'source': None, 'track': None}
         # optional callback invoked when the active track changes (e.g., next/previous/end)

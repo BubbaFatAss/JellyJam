@@ -11,6 +11,7 @@
   <button type="button" id="main-tab-mqtt" class="tab-btn">MQTT</button>
   <button type="button" id="main-tab-logging" class="tab-btn">Logging</button>
   <button type="button" id="main-tab-controls" class="tab-btn">Controls</button>
+  <button type="button" id="main-tab-local-music" class="tab-btn">Local Music</button>
 </div>
 
 <!-- Display Tab -->
@@ -120,6 +121,48 @@
     <div>
       <label for="plugins_json">Plugin JSON</label>
       <textarea id="plugins_json" name="plugins_json" rows="12" style="width:100%;font-family:monospace;">{{ plugins_json }}</textarea>
+    </div>
+    
+    <hr style="margin:2rem 0;border:none;border-top:1px solid #ddd;">
+    
+    <h4 style="margin-bottom:0.5rem;">Startup Animation</h4>
+    <p style="margin-bottom:1rem;color:#666;font-size:0.9rem;">
+      Configure the animation that plays when the application starts.
+    </p>
+    
+    <div>
+      <label for="play_startup_animation">
+        <input type="checkbox" id="play_startup_animation" name="play_startup_animation" 
+               {% if display_cfg.get('play_startup_animation', true) %}checked{% endif %}>
+        Play Startup Animation
+      </label>
+      <small style="color:#666;display:block;margin-top:0.25rem;">Enable or disable the startup animation</small>
+    </div>
+    
+    <div>
+      <label for="startup_animation_name">Animation File</label>
+      <input type="text" id="startup_animation_name" name="startup_animation_name" 
+             value="{{ display_cfg.get('startup_animation_name', 'startup.gif') }}" 
+             placeholder="startup.gif">
+      <small style="color:#666;">Filename of the animation to play (must exist in animations directory)</small>
+    </div>
+    
+    <div>
+      <label for="startup_animation_speed">Animation Speed</label>
+      <input type="number" id="startup_animation_speed" name="startup_animation_speed" 
+             min="0.1" max="10" step="0.1" 
+             value="{{ display_cfg.get('startup_animation_speed', 1.0) }}" 
+             placeholder="1.0">
+      <small style="color:#666;">Playback speed multiplier (0.1 = slower, 10.0 = faster, default: 1.0)</small>
+    </div>
+    
+    <div>
+      <label for="animation_dup_suppress_sec">Duplicate Suppression (seconds)</label>
+      <input type="number" id="animation_dup_suppress_sec" name="animation_dup_suppress_sec" 
+             min="0" max="10" step="0.1" 
+             value="{{ display_cfg.get('animation_dup_suppress_sec', 0.5) }}" 
+             placeholder="0.5">
+      <small style="color:#666;">Time in seconds to suppress duplicate animation triggers (default: 0.5)</small>
     </div>
   </div>
 
@@ -424,21 +467,61 @@
   </form>
 </div>
 
+<!-- Local Music Tab -->
+<div id="local-music-tab-content" style="display:none;">
+  <h3>Local Music Settings</h3>
+  <p style="margin-bottom:1.5rem;color:#666;">
+    Configure the directory where local music files are stored. This path is used by the local music player to discover and play audio files.
+  </p>
+  
+  <form method="post" action="{{ url_for('settings_local_music') }}">
+    <div>
+      <label for="music_directory">Music Directory</label>
+      <input type="text" id="music_directory" name="music_directory" 
+             value="{{ local_music_cfg.get('music_directory', '/music') }}" 
+             placeholder="/music" 
+             style="width:100%;">
+      <small style="color:#666;">Absolute path to the directory containing your music files</small>
+    </div>
+    
+    <div style="margin-top:1rem;padding:1rem;background:#e8f4f8;border-left:4px solid #0288d1;border-radius:4px;">
+      <strong>💡 Tips:</strong>
+      <ul style="margin:0.5rem 0 0 1.25rem;padding:0;">
+        <li>Use absolute paths (e.g., <code>/music</code>, <code>/home/user/music</code>)</li>
+        <li>Ensure the directory is readable by the application</li>
+        <li>Supported formats: MP3, FLAC, WAV, OGG, M4A, AAC</li>
+        <li>Subdirectories are scanned recursively</li>
+      </ul>
+    </div>
+    
+    <div style="margin-top:1.5rem;padding:1rem;background:#f8f9fa;border-radius:4px;">
+      <strong>⚠️ Important:</strong> Application restart required for music directory changes to take effect.
+    </div>
+    
+    <div style="margin-top:1rem;">
+      <button type="submit">Save Local Music Settings</button>
+      <a href="{{ url_for('settings') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function(){
-  // Main tab switching (Display vs Lighting vs Artwork vs MQTT vs Logging vs Controls)
+  // Main tab switching (Display vs Lighting vs Artwork vs MQTT vs Logging vs Controls vs Local Music)
   const mainTabDisplay = document.getElementById('main-tab-display');
   const mainTabLighting = document.getElementById('main-tab-lighting');
   const mainTabArtwork = document.getElementById('main-tab-artwork');
   const mainTabMqtt = document.getElementById('main-tab-mqtt');
   const mainTabLogging = document.getElementById('main-tab-logging');
   const mainTabControls = document.getElementById('main-tab-controls');
+  const mainTabLocalMusic = document.getElementById('main-tab-local-music');
   const displayTabContent = document.getElementById('display-tab-content');
   const lightingTabContent = document.getElementById('lighting-tab-content');
   const artworkTabContent = document.getElementById('artwork-tab-content');
   const mqttTabContent = document.getElementById('mqtt-tab-content');
   const loggingTabContent = document.getElementById('logging-tab-content');
   const controlsTabContent = document.getElementById('controls-tab-content');
+  const localMusicTabContent = document.getElementById('local-music-tab-content');
   
   function showMainTab(tab) {
     // Hide all tabs
@@ -448,12 +531,14 @@ document.addEventListener('DOMContentLoaded', function(){
     mqttTabContent.style.display = 'none';
     loggingTabContent.style.display = 'none';
     controlsTabContent.style.display = 'none';
+    localMusicTabContent.style.display = 'none';
     mainTabDisplay.classList.remove('active');
     mainTabLighting.classList.remove('active');
     mainTabArtwork.classList.remove('active');
     mainTabMqtt.classList.remove('active');
     mainTabLogging.classList.remove('active');
     mainTabControls.classList.remove('active');
+    mainTabLocalMusic.classList.remove('active');
     
     // Show selected tab
     if (tab === 'lighting') {
@@ -473,6 +558,9 @@ document.addEventListener('DOMContentLoaded', function(){
     } else if (tab === 'controls') {
       controlsTabContent.style.display = '';
       mainTabControls.classList.add('active');
+    } else if (tab === 'local-music') {
+      localMusicTabContent.style.display = '';
+      mainTabLocalMusic.classList.add('active');
     } else {
       displayTabContent.style.display = '';
       mainTabDisplay.classList.add('active');
@@ -485,6 +573,7 @@ document.addEventListener('DOMContentLoaded', function(){
   mainTabMqtt.addEventListener('click', () => showMainTab('mqtt'));
   mainTabLogging.addEventListener('click', () => showMainTab('logging'));
   mainTabControls.addEventListener('click', () => showMainTab('controls'));
+  mainTabLocalMusic.addEventListener('click', () => showMainTab('local-music'));
   
   // Load artwork cache info
   function loadArtworkInfo() {
