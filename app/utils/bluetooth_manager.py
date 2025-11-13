@@ -679,7 +679,7 @@ try {{
             }}
             'ProvidePin' {{
                 # Use provided PIN or default
-                $args.AcceptWithPin($pin)
+                $args.AcceptWithPin($using:pin)
             }}
             'DisplayPin' {{
                 # Device shows PIN - cannot handle interactively in PowerShell
