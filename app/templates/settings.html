@@ -1474,23 +1474,13 @@ document.addEventListener('DOMContentLoaded', function(){
 
   async function pairDevice(address, name, deviceId) {
     try {
-      // Prompt user for PIN (optional)
-      let pin = prompt(`Enter PIN for ${name} (leave empty if no PIN required):`, '');
-      
-      // User cancelled
-      if (pin === null) {
-        return;
-      }
-      
-      // Trim whitespace
-      pin = pin.trim();
-      
       const requestBody = { address: address };
       if (deviceId) {
         requestBody.device_id = deviceId;
       }
-      if (pin) {
-        requestBody.pin = pin;
+      
+      if (typeof showToast === 'function') {
+        showToast(`Pairing with ${name}...`);
       }
       
       const response = await fetch('/api/bluetooth/pair', {
@@ -1502,12 +1492,33 @@ document.addEventListener('DOMContentLoaded', function(){
       
       if (data.success) {
         if (typeof showToast === 'function') {
-          showToast(`Paired with ${name}`);
+          showToast(`Successfully paired with ${name}`);
         }
         scanBluetoothDevices(); // Refresh device list
       } else {
-        if (typeof showToast === 'function') {
-          showToast(`Failed to pair with ${name}: ${data.error || 'Unknown error'}`);
+        // Check if device requires manual pairing based on pairing_kind
+        const pairingKind = data.pairing_kind;
+        const requiresManualPairing = pairingKind === 'DisplayPin' || pairingKind === 'ProvidePin';
+        
+        if (requiresManualPairing) {
+          const manualInstructions = `${name} requires manual pairing with a PIN.\n\n` +
+            `The device displays a PIN code on its screen that must be entered during pairing.\n\n` +
+            `To pair:\n` +
+            `1. Open Windows Settings > Bluetooth & devices\n` +
+            `2. Click "Add device" > "Bluetooth"\n` +
+            `3. Select "${name}" from the list\n` +
+            `4. Enter the PIN shown on the device's screen\n\n` +
+            `Click OK to open Windows Settings now.`;
+          
+          if (confirm(manualInstructions)) {
+            window.open('ms-settings:bluetooth', '_blank');
+          }
+        } else {
+          // Generic pairing failure
+          const errorMsg = data.error || 'Unknown error';
+          if (typeof showToast === 'function') {
+            showToast(`Failed to pair: ${errorMsg}`);
+          }
         }
       }
     } catch(e) {

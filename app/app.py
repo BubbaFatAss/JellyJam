@@ -2914,8 +2914,28 @@ try:
             if not address:
                 return jsonify({'success': False, 'error': 'No address provided'}), 400
             
-            success = bluetooth_manager.pair_device(address, device_id=device_id, pin=pin)
-            return jsonify({'success': success})
+            success, error_info = bluetooth_manager.pair_device(address, device_id=device_id, pin=pin)
+            
+            if success:
+                return jsonify({'success': True})
+            else:
+                error_msg = 'Pairing failed'
+                if error_info:
+                    pairing_kind = error_info.get('pairing_kind', 'Unknown')
+                    status = error_info.get('status', 'Unknown')
+                    
+                    # Build detailed error message
+                    if pairing_kind in ['DisplayPin', 'ProvidePin']:
+                        error_msg = f'Device requires manual pairing (PIN display required). Status: {status}, Kind: {pairing_kind}'
+                    else:
+                        error_msg = f'Pairing failed: {status} (Kind: {pairing_kind})'
+                
+                return jsonify({
+                    'success': False, 
+                    'error': error_msg,
+                    'pairing_kind': error_info.get('pairing_kind') if error_info else None,
+                    'status': error_info.get('status') if error_info else None
+                })
         except Exception as e:
             log.error(f"Failed to pair Bluetooth device: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500

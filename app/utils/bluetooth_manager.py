@@ -569,7 +569,12 @@ def pair_device_windows(address, device_id=None, pin=None):
         device_id: Optional Windows device ID. If not provided, will scan to find it.
         pin: Optional PIN code for pairing (e.g., "0000", "1234")
     
-    Returns True if successful, False otherwise.
+    Returns:
+        Tuple of (success: bool, error_info: dict or None)
+        error_info contains 'status' and 'pairing_kind' if pairing failed
+    
+    Note: For devices requiring interactive PIN display/entry, this will fail and
+    the user should pair manually via Windows Settings.
     """
     logger.info(f"Attempting to pair with device on Windows: {address}")
     if pin:
@@ -595,8 +600,8 @@ def pair_device_windows(address, device_id=None, pin=None):
     
     logger.info(f"Using device ID: {device_id}")
     
-    # Use Windows Runtime API to pair the device
-    # We'll use custom pairing to handle the pairing ceremony
+    # For devices requiring interactive PIN, we'll try to open Windows Settings
+    # Use Windows Runtime API to attempt automatic pairing first
     cmd = f"""
 [Windows.Devices.Enumeration.DeviceInformation,Windows.Devices.Enumeration,ContentType=WindowsRuntime] | Out-Null
 [Windows.Devices.Bluetooth.BluetoothDevice,Windows.Devices.Bluetooth,ContentType=WindowsRuntime] | Out-Null
@@ -636,32 +641,50 @@ try {{
         exit 1
     }}
     
-    # Create custom pairing with specific kinds
+    # Create custom pairing
     $customPairing = $deviceInfo.Pairing.Custom
     
-    # Output diagnostic info
-    Write-Output "DEBUG:CanPair=$($deviceInfo.Pairing.CanPair)"
-    Write-Output "DEBUG:IsPaired=$($deviceInfo.Pairing.IsPaired)"
+    # Try to predict pairing kind based on protection level
+    # This is a heuristic since we can't reliably capture it from the event handler
+    $predictedPairingKind = "ConfirmOnly"
+    if ($deviceInfo.Pairing.ProtectionLevel -eq 'EncryptionAndAuthentication') {{
+        $predictedPairingKind = "ProvidePin"
+    }}
     
     # Register event handler for pairing requested
     $pin = "{pin if pin else '0000'}"
+    
+    # Use a temporary file to communicate pairing kind from event handler
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    
     $pairingRequestedHandler = {{
         param($sender, $args)
         
-        # Handle different pairing kinds - no logging inside the handler
+        # Write the pairing kind to temp file (event handlers can't modify parent scope variables)
+        try {{
+            $args.PairingKind.ToString() | Out-File -FilePath $using:tempFile -Force
+        }} catch {{
+            # Ignore file write errors
+        }}
+        
+        # Handle different pairing kinds
         switch ($args.PairingKind) {{
             'ConfirmOnly' {{
+                # Auto-accept
                 $args.Accept()
             }}
             'ConfirmPinMatch' {{
+                # Auto-accept PIN match
                 $args.Accept()
             }}
             'ProvidePin' {{
+                # Use provided PIN or default
                 $args.AcceptWithPin($pin)
             }}
             'DisplayPin' {{
-                # User should see the PIN on their device and confirm it
-                $args.Accept($pin)
+                # Device shows PIN - cannot handle interactively in PowerShell
+                # Accept with default PIN, will likely fail
+                $args.Accept()
             }}
             default {{
                 $args.Accept()
@@ -673,24 +696,45 @@ try {{
     $pairingRequestedToken = $customPairing.add_PairingRequested($pairingRequestedHandler)
     
     try {{
-        # Try pairing with multiple kinds - ConfirmOnly + ProvidePin is most common for audio devices
+        # Try pairing with all common kinds
         $pairingKinds = [Windows.Devices.Enumeration.DevicePairingKinds]::ConfirmOnly -bor 
                        [Windows.Devices.Enumeration.DevicePairingKinds]::ProvidePin -bor
-                       [Windows.Devices.Enumeration.DevicePairingKinds]::ConfirmPinMatch
+                       [Windows.Devices.Enumeration.DevicePairingKinds]::ConfirmPinMatch -bor
+                       [Windows.Devices.Enumeration.DevicePairingKinds]::DisplayPin
         
         $pairingOp = $customPairing.PairAsync($pairingKinds)
         $pairingResult = Await $pairingOp ([Windows.Devices.Enumeration.DevicePairingResult])
         
+        # Try to read the actual pairing kind from temp file
+        $actualPairingKind = $predictedPairingKind
+        if (Test-Path $tempFile) {{
+            try {{
+                $fileContent = Get-Content -Path $tempFile -Raw -ErrorAction SilentlyContinue
+                if ($fileContent) {{
+                    $actualPairingKind = $fileContent.Trim()
+                }}
+                Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+            }} catch {{
+                # Use predicted if we can't read the file
+            }}
+        }}
+        
         if ($pairingResult.Status -eq 'Paired' -or $pairingResult.Status -eq 'AlreadyPaired') {{
             Write-Output "Success"
         }} else {{
-            # Output detailed error information
+            # Output the pairing kind that was requested
             Write-Output "Failed:$($pairingResult.Status)"
+            Write-Output "PairingKind: $actualPairingKind"
             Write-Output "ProtectionLevel: $($pairingResult.ProtectionLevelUsed)"
         }}
     }} finally {{
         # Unregister event handler
         $customPairing.remove_PairingRequested($pairingRequestedToken)
+        
+        # Clean up temp file if it still exists
+        if (Test-Path $tempFile) {{
+            Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+        }}
     }}
     
     $btDevice.Dispose()
@@ -715,25 +759,45 @@ try {{
     
     if success:
         logger.info(f"Successfully paired with {address}")
+        return True, None
     else:
-        # Extract the actual pairing status from the output
+        # Extract the pairing status and kind from output
         status_match = re.search(r'Failed:(\w+)', stdout)
+        kind_match = re.search(r'PairingKind:\s*(\w+)', stdout)
+        
+        error_info = {
+            'status': 'Unknown',
+            'pairing_kind': 'Unknown'
+        }
+        
         if status_match:
             pairing_status = status_match.group(1)
-            logger.error(f"Pairing failed with status: {pairing_status}")
+            pairing_kind = kind_match.group(1) if kind_match else "Unknown"
             
-            # If custom pairing failed, suggest using Windows Settings
-            if pairing_status == "Failed":
-                logger.warning(f"Custom pairing failed. Device may require manual pairing via Windows Settings.")
-                logger.info(f"To pair manually: Settings > Bluetooth & devices > Add device")
+            error_info['status'] = pairing_status
+            error_info['pairing_kind'] = pairing_kind
             
-            # Log additional context if available
-            if "ProtectionLevel" in stdout:
-                logger.info(f"Additional pairing info: {stdout}")
+            logger.error(f"Pairing failed with status: {pairing_status}, PairingKind: {pairing_kind}")
+            
+            # Check if device requires interactive PIN entry
+            if pairing_kind in ['DisplayPin', 'ProvidePin']:
+                logger.warning(f"Device requires interactive pairing with PIN (PairingKind: {pairing_kind})")
+                logger.info(f"Please pair manually:")
+                logger.info(f"1. Open Settings > Bluetooth & devices")
+                logger.info(f"2. Click 'Add device'")
+                logger.info(f"3. Select 'Bluetooth'")
+                logger.info(f"4. Choose the device from the list")
+                logger.info(f"5. Enter the PIN shown on your device's screen")
+            else:
+                logger.warning(f"Pairing failed. Device may need to be in pairing mode.")
+                logger.info(f"Put the device in pairing mode and try again, or pair manually via Windows Settings.")
+            
+            # Log full output for debugging
+            logger.debug(f"Full pairing output: {stdout}")
         else:
             logger.error(f"Failed to pair with {address}: {stdout} {stderr}")
-    
-    return success
+        
+        return False, error_info
 
 
 def pair_device(address, device_id=None, pin=None):
@@ -745,15 +809,19 @@ def pair_device(address, device_id=None, pin=None):
         device_id: Optional device ID (Windows only). If not provided, will scan to find it.
         pin: Optional PIN code for pairing (e.g., "0000", "1234")
     
-    Returns True if successful, False otherwise.
+    Returns:
+        Tuple of (success: bool, error_info: dict or None)
+        For Windows: error_info contains 'status' and 'pairing_kind' if pairing failed
+        For Linux: error_info is None (returns legacy boolean for compatibility)
     """
     if IS_LINUX:
-        return pair_device_linux(address, pin=pin)
+        success = pair_device_linux(address, pin=pin)
+        return success, None  # Linux returns legacy boolean, no error details
     elif IS_WINDOWS:
         return pair_device_windows(address, device_id=device_id, pin=pin)
     else:
         logger.error(f"Unsupported operating system: {platform.system()}")
-        return False
+        return False, {'status': 'UnsupportedOS', 'pairing_kind': 'Unknown'}
 
 
 def connect_device_linux(address):
