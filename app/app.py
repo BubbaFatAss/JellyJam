@@ -2873,6 +2873,89 @@ except Exception:
     log.exception('Audiobooks module failed to load; audiobooks features disabled')
 
 
+# ========== Bluetooth API Routes ==========
+try:
+    from utils import bluetooth_manager
+
+    @app.route('/api/bluetooth/status')
+    def api_bluetooth_status():
+        """Get current Bluetooth connection status."""
+        try:
+            status = bluetooth_manager.get_status()
+            return jsonify(status)
+        except Exception as e:
+            log.error(f"Failed to get Bluetooth status: {e}")
+            return jsonify({
+                'connected': False,
+                'device_name': None,
+                'device_address': None,
+                'error': str(e)
+            }), 500
+
+    @app.route('/api/bluetooth/scan', methods=['POST'])
+    def api_bluetooth_scan():
+        """Scan for available Bluetooth devices."""
+        try:
+            devices = bluetooth_manager.scan_devices()
+            return jsonify({'devices': devices})
+        except Exception as e:
+            log.error(f"Failed to scan Bluetooth devices: {e}")
+            return jsonify({'devices': [], 'error': str(e)}), 500
+
+    @app.route('/api/bluetooth/pair', methods=['POST'])
+    def api_bluetooth_pair():
+        """Pair with a Bluetooth device."""
+        try:
+            data = request.get_json()
+            address = data.get('address')
+            device_id = data.get('device_id')  # Optional device ID
+            pin = data.get('pin')  # Optional PIN code
+            
+            if not address:
+                return jsonify({'success': False, 'error': 'No address provided'}), 400
+            
+            success = bluetooth_manager.pair_device(address, device_id=device_id, pin=pin)
+            return jsonify({'success': success})
+        except Exception as e:
+            log.error(f"Failed to pair Bluetooth device: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/bluetooth/connect', methods=['POST'])
+    def api_bluetooth_connect():
+        """Connect to a paired Bluetooth device."""
+        try:
+            data = request.get_json()
+            address = data.get('address')
+            device_id = data.get('device_id')  # Optional device ID
+            is_auto = data.get('auto', False)
+            
+            if not address:
+                return jsonify({'success': False, 'error': 'No address provided'}), 400
+            
+            success = bluetooth_manager.connect_device(address, device_id=device_id)
+            
+            if success and not is_auto:
+                log.info(f"User manually connected to Bluetooth device: {address}")
+            
+            return jsonify({'success': success})
+        except Exception as e:
+            log.error(f"Failed to connect to Bluetooth device: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/bluetooth/disconnect', methods=['POST'])
+    def api_bluetooth_disconnect():
+        """Disconnect from current Bluetooth device."""
+        try:
+            success = bluetooth_manager.disconnect_device()
+            return jsonify({'success': success})
+        except Exception as e:
+            log.error(f"Failed to disconnect Bluetooth device: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+except Exception:
+    log.exception('Bluetooth module failed to load; Bluetooth features disabled')
+
+
 if __name__ == '__main__':
     # Determine SSL context: prefer user-provided cert+key via env vars,
     # otherwise fall back to adhoc TLS if available.

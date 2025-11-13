@@ -15,6 +15,7 @@
   <button type="button" id="main-tab-nfc" class="tab-btn">NFC</button>
   <button type="button" id="main-tab-spotify" class="tab-btn">Spotify</button>
   <button type="button" id="main-tab-audible" class="tab-btn">Audible</button>
+  <button type="button" id="main-tab-bluetooth" class="tab-btn">Bluetooth</button>
 </div>
 
 <!-- Display Tab -->
@@ -800,9 +801,84 @@
   </div>
 </div>
 
+<!-- Bluetooth Tab -->
+<div id="bluetooth-tab-content" style="display:none;">
+  <style>
+    .status-badge {
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .status-badge.connected {
+      background-color: #d4edda;
+      color: #155724;
+    }
+    .status-badge.disconnected {
+      background-color: #f8d7da;
+      color: #721c24;
+    }
+    .bluetooth-device-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.75rem;
+      margin-bottom: 0.5rem;
+      background: #f8f9fa;
+      border: 1px solid #dee2e6;
+      border-radius: 4px;
+    }
+    .bluetooth-device-item:hover {
+      background: #e9ecef;
+    }
+  </style>
+
+  <h3>Bluetooth Audio Settings</h3>
+  
+  <div class="settings-group">
+    <h4>Connection Status</h4>
+    <p style="margin-bottom:1rem;">
+      Status: <span id="bluetooth-status" class="status-badge disconnected">Not Connected</span>
+    </p>
+    <p style="margin-bottom:1rem;">
+      Current Device: <strong><span id="bluetooth-current-device">None</span></strong>
+    </p>
+    <button type="button" id="bluetooth-disconnect-btn" class="danger" style="display:none;">Disconnect</button>
+  </div>
+  
+  <div class="settings-group">
+    <h4>Auto-Reconnect</h4>
+    <p style="margin-bottom:1rem;color:#666;font-size:0.9rem;">
+      Automatically reconnect to the last connected speaker when available.
+    </p>
+    <div id="bluetooth-auto-reconnect-status" style="padding:0.75rem;background:#e3f2fd;border-left:4px solid #0288d1;margin-bottom:1rem;">
+      <span id="bluetooth-auto-reconnect-text">Auto-reconnect is active (polling every 2 seconds)</span>
+    </div>
+  </div>
+  
+  <div class="settings-group">
+    <h4>Available Bluetooth Speakers</h4>
+    <p style="margin-bottom:1rem;color:#666;font-size:0.9rem;">
+      Scan for nearby Bluetooth audio devices.
+    </p>
+    
+    <div style="margin-bottom:1rem;">
+      <button type="button" id="bluetooth-scan-btn" style="background:#0288d1;color:white;">
+        🔍 Scan for Devices
+      </button>
+      <span id="bluetooth-scan-status" style="margin-left:1rem;color:#666;font-size:0.9rem;"></span>
+    </div>
+    
+    <div id="bluetooth-devices-list" style="margin-top:1rem;">
+      <p style="color:#999;font-style:italic;">Click "Scan for Devices" to discover Bluetooth speakers</p>
+    </div>
+  </div>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function(){
-  // Main tab switching (Display vs Lighting vs Artwork vs MQTT vs Logging vs Controls vs Local Music vs NFC vs Spotify vs Audible)
+  // Main tab switching (Display vs Lighting vs Artwork vs MQTT vs Logging vs Controls vs Local Music vs NFC vs Spotify vs Audible vs Bluetooth)
   const mainTabDisplay = document.getElementById('main-tab-display');
   const mainTabLighting = document.getElementById('main-tab-lighting');
   const mainTabArtwork = document.getElementById('main-tab-artwork');
@@ -813,6 +889,7 @@ document.addEventListener('DOMContentLoaded', function(){
   const mainTabNfc = document.getElementById('main-tab-nfc');
   const mainTabSpotify = document.getElementById('main-tab-spotify');
   const mainTabAudible = document.getElementById('main-tab-audible');
+  const mainTabBluetooth = document.getElementById('main-tab-bluetooth');
   const displayTabContent = document.getElementById('display-tab-content');
   const lightingTabContent = document.getElementById('lighting-tab-content');
   const artworkTabContent = document.getElementById('artwork-tab-content');
@@ -823,6 +900,7 @@ document.addEventListener('DOMContentLoaded', function(){
   const nfcTabContent = document.getElementById('nfc-tab-content');
   const spotifyTabContent = document.getElementById('spotify-tab-content');
   const audibleTabContent = document.getElementById('audible-tab-content');
+  const bluetoothTabContent = document.getElementById('bluetooth-tab-content');
   
   function showMainTab(tab) {
     // Hide all tabs
@@ -836,6 +914,7 @@ document.addEventListener('DOMContentLoaded', function(){
     nfcTabContent.style.display = 'none';
     spotifyTabContent.style.display = 'none';
     audibleTabContent.style.display = 'none';
+    bluetoothTabContent.style.display = 'none';
     mainTabDisplay.classList.remove('active');
     mainTabLighting.classList.remove('active');
     mainTabArtwork.classList.remove('active');
@@ -846,6 +925,7 @@ document.addEventListener('DOMContentLoaded', function(){
     mainTabNfc.classList.remove('active');
     mainTabSpotify.classList.remove('active');
     mainTabAudible.classList.remove('active');
+    mainTabBluetooth.classList.remove('active');
     
     // Show selected tab
     if (tab === 'lighting') {
@@ -880,6 +960,10 @@ document.addEventListener('DOMContentLoaded', function(){
       audibleTabContent.style.display = '';
       mainTabAudible.classList.add('active');
       checkAudibleAuthStatus();  // Check Audible authentication status
+    } else if (tab === 'bluetooth') {
+      bluetoothTabContent.style.display = '';
+      mainTabBluetooth.classList.add('active');
+      checkBluetoothStatus();  // Check Bluetooth connection status
     } else {
       displayTabContent.style.display = '';
       mainTabDisplay.classList.add('active');
@@ -896,6 +980,7 @@ document.addEventListener('DOMContentLoaded', function(){
   mainTabNfc.addEventListener('click', () => showMainTab('nfc'));
   mainTabSpotify.addEventListener('click', () => showMainTab('spotify'));
   mainTabAudible.addEventListener('click', () => showMainTab('audible'));
+  mainTabBluetooth.addEventListener('click', () => showMainTab('bluetooth'));
   
   // Handle URL hash for direct tab linking (e.g., #audible)
   if (window.location.hash) {
@@ -904,6 +989,8 @@ document.addEventListener('DOMContentLoaded', function(){
       showMainTab('audible');
     } else if (hash === 'spotify') {
       showMainTab('spotify');
+    } else if (hash === 'bluetooth') {
+      showMainTab('bluetooth');
     } else if (hash === 'display') {
       showMainTab('display');
     } else if (hash === 'lighting') {
@@ -1303,6 +1390,230 @@ document.addEventListener('DOMContentLoaded', function(){
       }
     });
   }
+
+  // ========== Bluetooth Functions ==========
+  let bluetoothPollingInterval = null;
+
+  async function checkBluetoothStatus() {
+    try {
+      const response = await fetch('/api/bluetooth/status');
+      const data = await response.json();
+      
+      const statusEl = document.getElementById('bluetooth-status');
+      const deviceEl = document.getElementById('bluetooth-current-device');
+      const disconnectBtn = document.getElementById('bluetooth-disconnect-btn');
+      
+      if (data.connected) {
+        statusEl.textContent = 'Connected';
+        statusEl.className = 'status-badge connected';
+        deviceEl.textContent = data.device_name || data.device_address || 'Unknown Device';
+        disconnectBtn.style.display = 'inline-block';
+      } else {
+        statusEl.textContent = 'Not Connected';
+        statusEl.className = 'status-badge disconnected';
+        deviceEl.textContent = 'None';
+        disconnectBtn.style.display = 'none';
+      }
+    } catch(e) {
+      console.error('Failed to check Bluetooth status:', e);
+    }
+  }
+
+  async function scanBluetoothDevices() {
+    const scanBtn = document.getElementById('bluetooth-scan-btn');
+    const deviceList = document.getElementById('bluetooth-devices-list');
+    
+    scanBtn.disabled = true;
+    scanBtn.textContent = 'Scanning...';
+    deviceList.innerHTML = '<p>Scanning for Bluetooth devices...</p>';
+    
+    try {
+      const response = await fetch('/api/bluetooth/scan', { method: 'POST' });
+      const data = await response.json();
+      
+      if (data.devices && data.devices.length > 0) {
+        deviceList.innerHTML = '';
+        data.devices.forEach(device => {
+          const deviceDiv = document.createElement('div');
+          deviceDiv.className = 'bluetooth-device-item';
+          
+          const infoDiv = document.createElement('div');
+          infoDiv.innerHTML = `
+            <strong>${device.name || 'Unknown Device'}</strong>
+            <br><small>${device.address}</small>
+          `;
+          
+          const buttonDiv = document.createElement('div');
+          const actionBtn = document.createElement('button');
+          actionBtn.className = 'btn btn-sm';
+          
+          if (device.paired) {
+            actionBtn.textContent = 'Connect';
+            actionBtn.addEventListener('click', () => connectDevice(device.address, device.name || 'Unknown', device.device_id));
+          } else {
+            actionBtn.textContent = 'Pair';
+            actionBtn.addEventListener('click', () => pairDevice(device.address, device.name || 'Unknown', device.device_id));
+          }
+          
+          buttonDiv.appendChild(actionBtn);
+          deviceDiv.appendChild(infoDiv);
+          deviceDiv.appendChild(buttonDiv);
+          deviceList.appendChild(deviceDiv);
+        });
+      } else {
+        deviceList.innerHTML = '<p>No Bluetooth devices found.</p>';
+      }
+    } catch(e) {
+      deviceList.innerHTML = '<p>Failed to scan for devices.</p>';
+      console.error('Bluetooth scan failed:', e);
+    } finally {
+      scanBtn.disabled = false;
+      scanBtn.textContent = '🔍 Scan for Devices';
+    }
+  }
+
+  async function pairDevice(address, name, deviceId) {
+    try {
+      // Prompt user for PIN (optional)
+      let pin = prompt(`Enter PIN for ${name} (leave empty if no PIN required):`, '');
+      
+      // User cancelled
+      if (pin === null) {
+        return;
+      }
+      
+      // Trim whitespace
+      pin = pin.trim();
+      
+      const requestBody = { address: address };
+      if (deviceId) {
+        requestBody.device_id = deviceId;
+      }
+      if (pin) {
+        requestBody.pin = pin;
+      }
+      
+      const response = await fetch('/api/bluetooth/pair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        if (typeof showToast === 'function') {
+          showToast(`Paired with ${name}`);
+        }
+        scanBluetoothDevices(); // Refresh device list
+      } else {
+        if (typeof showToast === 'function') {
+          showToast(`Failed to pair with ${name}: ${data.error || 'Unknown error'}`);
+        }
+      }
+    } catch(e) {
+      console.error('Pairing failed:', e);
+      if (typeof showToast === 'function') {
+        showToast(`Pairing failed: ${e.message}`);
+      }
+    }
+  }
+
+  async function connectDevice(address, name, deviceId) {
+    try {
+      const requestBody = { address: address };
+      if (deviceId) {
+        requestBody.device_id = deviceId;
+      }
+      
+      const response = await fetch('/api/bluetooth/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        if (typeof showToast === 'function') {
+          showToast(`Connected to ${name}`);
+        }
+        checkBluetoothStatus(); // Update status display
+      } else {
+        if (typeof showToast === 'function') {
+          showToast(`Failed to connect to ${name}: ${data.error || 'Unknown error'}`);
+        }
+      }
+    } catch(e) {
+      console.error('Connection failed:', e);
+      if (typeof showToast === 'function') {
+        showToast(`Connection failed: ${e.message}`);
+      }
+    }
+  }
+
+  async function disconnectDevice() {
+    try {
+      const response = await fetch('/api/bluetooth/disconnect', { method: 'POST' });
+      const data = await response.json();
+      
+      if (data.success) {
+        if (typeof showToast === 'function') {
+          showToast('Disconnected from Bluetooth device');
+        }
+        checkBluetoothStatus(); // Update status display
+      } else {
+        if (typeof showToast === 'function') {
+          showToast(`Failed to disconnect: ${data.error || 'Unknown error'}`);
+        }
+      }
+    } catch(e) {
+      console.error('Disconnect failed:', e);
+      if (typeof showToast === 'function') {
+        showToast(`Disconnect failed: ${e.message}`);
+      }
+    }
+  }
+
+  async function autoReconnectBluetooth() {
+    try {
+      const response = await fetch('/api/bluetooth/status');
+      const data = await response.json();
+      
+      // If not connected and we have a last connected device, try to reconnect
+      if (!data.connected && data.last_device && data.last_device.address) {
+        const reconnectResponse = await fetch('/api/bluetooth/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address: data.last_device.address, auto: true })
+        });
+        
+        if (reconnectResponse.ok) {
+          const reconnectData = await reconnectResponse.json();
+          if (reconnectData.success) {
+            checkBluetoothStatus(); // Update UI
+          }
+        }
+      }
+    } catch(e) {
+      // Silently fail - this is background polling
+      console.debug('Auto-reconnect check failed:', e);
+    }
+  }
+
+  // Bluetooth button event listeners
+  const bluetoothScanBtn = document.getElementById('bluetooth-scan-btn');
+  if (bluetoothScanBtn) {
+    bluetoothScanBtn.addEventListener('click', scanBluetoothDevices);
+  }
+  
+  const bluetoothDisconnectBtn = document.getElementById('bluetooth-disconnect-btn');
+  if (bluetoothDisconnectBtn) {
+    bluetoothDisconnectBtn.addEventListener('click', disconnectDevice);
+  }
+
+  // Start Bluetooth polling when page loads (every 2 seconds)
+  bluetoothPollingInterval = setInterval(() => {
+    autoReconnectBluetooth();
+  }, 2000);
   
   // Stop log viewer when leaving the page
   window.addEventListener('beforeunload', stopLogViewer);
